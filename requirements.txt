@@ -5,3 +5,4 @@ plotly>=5.17.0
 garminconnect
 reportlab>=4.0.0
 aiohttp>=3.8.0
+google-genai
