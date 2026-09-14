@@ -2,3 +2,6 @@ __pycache__/
 *.pyc
 .claude/
 .venv/
+_commit_msg.txt
+_test_*.py
+_test_output.pdf
