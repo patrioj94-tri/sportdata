@@ -304,6 +304,16 @@ def weekly_overall_totals(df_week):
     }
 
 
+def delta_class(value, threshold=0.05):
+    """Clasifica una variación numérica en 'positive'/'negative'/'neutral' para
+    pintarla con el color e icono correspondiente (▲/▼) en el resumen visual."""
+    if value > threshold:
+        return 'positive'
+    if value < -threshold:
+        return 'negative'
+    return 'neutral'
+
+
 def format_discipline_delta(sport, cur, prev):
     """Texto de variación semanal para una disciplina, en la unidad que corresponda."""
     if sport == 'Fuerza':
