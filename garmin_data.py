@@ -73,7 +73,11 @@ def compute_training_load(df_acts, days_back=365):
 
 
 @st.cache_data(ttl=1800, show_spinner="Syncing Patri's health, HRV, sleep, and telemetry...")
-def load_all_garmin_data(_client, days_back=365):
+def load_all_garmin_data(_client, days_back=365, user_key=None):
+    # user_key (el email) no se usa dentro de la función: existe solo para que la
+    # caché de Streamlit distinga entre usuarios. "_client" no se incluye en la
+    # clave de caché (por el guion bajo), así que sin esto dos personas de la app
+    # pedirían el mismo días_back y una recibiría los datos cacheados de la otra.
     today = datetime.now().date()
 
     # 1. EXTRACCIÓN DE SALUD Y SUEÑO (en paralelo para acelerar la carga)
@@ -208,9 +212,20 @@ def get_activity_self_evaluation(_client, activity_id):
 
 
 @st.cache_data(ttl=1800, show_spinner=False)
-def get_training_readiness_today(_client):
+def get_activity_splits(_client, activity_id):
+    """Devuelve los intervalos/series (laps) guardados en Garmin para una actividad, si los tiene."""
+    try:
+        data = _client.get_activity_splits(activity_id) or {}
+        return data.get('lapDTOs', []) or []
+    except Exception:
+        return []
+
+
+@st.cache_data(ttl=1800, show_spinner=False)
+def get_training_readiness_today(_client, user_key=None):
     """Puntuación de preparación diaria de Garmin (0-100), con los factores que la componen:
-    sueño, HRV, recuperación, carga de entreno y estrés."""
+    sueño, HRV, recuperación, carga de entreno y estrés. user_key aísla la caché por usuario
+    (ver comentario en load_all_garmin_data)."""
     try:
         data = _client.get_training_readiness(datetime.now().date().isoformat())
         if isinstance(data, list) and data:
@@ -223,8 +238,9 @@ def get_training_readiness_today(_client):
 
 
 @st.cache_data(ttl=1800, show_spinner=False)
-def get_training_status_today(_client):
-    """Estado de entrenamiento de Garmin (Productive, Maintaining, Overreaching, etc.)."""
+def get_training_status_today(_client, user_key=None):
+    """Estado de entrenamiento de Garmin (Productive, Maintaining, Overreaching, etc.).
+    user_key aísla la caché por usuario (ver comentario en load_all_garmin_data)."""
     try:
         return _client.get_training_status(datetime.now().date().isoformat()) or {}
     except Exception:

@@ -10,6 +10,7 @@ from garmin_data import (
     compute_training_load,
     get_training_readiness_today,
     get_training_status_today,
+    get_activity_splits,
 )
 from formatting import (
     get_last_monday,
@@ -23,6 +24,7 @@ from formatting import (
     extract_training_status_label,
     LEVEL_MAP,
     SPORT_EMOJIS,
+    SPORT_COLORS,
     FEELING_OPTIONS,
     get_intensity_color,
     weekly_overall_totals,
@@ -31,6 +33,9 @@ from formatting import (
     format_activity_headline,
     format_discipline_headline,
     format_discipline_delta,
+    build_stat_row,
+    format_rpe_pill,
+    format_lap_row,
 )
 from pdf_report import build_weekly_report_pdf
 
@@ -39,23 +44,74 @@ st.set_page_config(page_title="Patri's Data Lab", layout="wide", page_icon="🏊
 
 st.markdown("""
 <style>
-    .activity-card {
-        background-color: #f8f9fa;
-        border-left: 5px solid #fc4c02; /* Naranja Deportivo */
-        border-radius: 8px;
-        padding: 16px;
-        margin-bottom: 12px;
-        box-shadow: 0 2px 6px rgba(0,0,0,0.06);
+    .strava-card {
+        background-color: #ffffff;
+        border-radius: 14px;
+        padding: 16px 18px;
+        margin-bottom: 4px;
+        box-shadow: 0 1px 2px rgba(24,22,20,.06), 0 8px 20px -12px rgba(24,22,20,.15);
     }
-    .badge-type {
-        background-color: rgba(252, 76, 2, 0.12);
-        color: #fc4c02;
-        padding: 4px 12px;
-        border-radius: 12px;
-        font-weight: 600;
-        font-size: 0.85rem;
-        display: inline-block;
-        border: 1px solid rgba(252, 76, 2, 0.25);
+    .strava-top {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        margin-bottom: 12px;
+    }
+    .icon-badge {
+        width: 38px;
+        height: 38px;
+        border-radius: 50%;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 1.05rem;
+        flex-shrink: 0;
+        color: #fff;
+        background: var(--sport-color, #fc4c02);
+    }
+    .strava-top .who {
+        flex: 1;
+        min-width: 0;
+    }
+    .strava-top .title {
+        font-weight: 700;
+        font-size: 1rem;
+        line-height: 1.25;
+    }
+    .strava-top .meta {
+        font-size: 0.78rem;
+        color: #767676;
+        margin-top: 2px;
+    }
+    .rpe-pill {
+        font-size: 0.7rem;
+        font-weight: 700;
+        padding: 4px 10px;
+        border-radius: 100px;
+        color: #fff;
+        background: var(--pill-color, #767676);
+        flex-shrink: 0;
+        white-space: nowrap;
+    }
+    .stat-row {
+        display: grid;
+        grid-template-columns: repeat(4, 1fr);
+        border-top: 1px solid #eee;
+        padding-top: 12px;
+        gap: 4px;
+    }
+    .stat-row .stat .v {
+        font-weight: 700;
+        font-size: 1.2rem;
+        line-height: 1;
+        color: #181614;
+    }
+    .stat-row .stat .l {
+        font-size: 0.65rem;
+        color: #767676;
+        text-transform: uppercase;
+        letter-spacing: .04em;
+        margin-top: 3px;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -73,10 +129,10 @@ days = st.sidebar.slider("Analysis Window (Days)", 30, 1095, 365, step=30)
 if email and password:
     client = get_garmin_client(email, password)
     if client:
-        df_health, sleep_info, hrv_data, respiration_data, df_acts = load_all_garmin_data(client, days)
+        df_health, sleep_info, hrv_data, respiration_data, df_acts = load_all_garmin_data(client, days, user_key=email)
         df_load = compute_training_load(df_acts, days)
-        readiness = get_training_readiness_today(client)
-        training_status_raw = get_training_status_today(client)
+        readiness = get_training_readiness_today(client, user_key=email)
+        training_status_raw = get_training_status_today(client, user_key=email)
         status_label, status_explanation = extract_training_status_label(training_status_raw)
 
         # MÉTICAS GLOBALES
@@ -385,6 +441,7 @@ if email and password:
                             for act_idx, (_, activity) in enumerate(day_acts.iterrows()):
                                 sport = activity.get('Sport', 'Otro')
                                 sport_emoji = SPORT_EMOJIS.get(sport, '⚡')
+                                sport_color = SPORT_COLORS.get(sport, '#fc4c02')
                                 activity_id = activity.get('activityId')
 
                                 distance_km = activity.get('Distance_km', 0)
@@ -399,14 +456,18 @@ if email and password:
                                 default_rpe, default_feeling = get_perceived_effort_and_feeling(activity, client)
                                 default_feeling_option = default_feeling if default_feeling in FEELING_OPTIONS else 'Sin anotar'
                                 default_comment = get_activity_comments(activity) or ''
+                                default_title = activity.get('activityName', 'Entrenamiento')
 
                                 rpe_key = f"rpe_{activity_id}"
                                 feeling_key = f"feeling_{activity_id}"
                                 comment_key = f"comment_{activity_id}"
+                                title_key = f"title_{activity_id}"
+                                detail_key = f"show_detail_{activity_id}"
 
                                 perceived_effort = st.session_state.get(rpe_key, default_rpe)
                                 feeling = st.session_state.get(feeling_key, default_feeling_option)
                                 comments = st.session_state.get(comment_key, default_comment)
+                                title = st.session_state.get(title_key, default_title)
                                 card_color = get_intensity_color(perceived_effort)
 
                                 avg_hr_val = activity.get('averageHR')
@@ -415,44 +476,55 @@ if email and password:
                                 cal_val = activity.get('Active_Calories')
                                 calories = int(cal_val) if pd.notna(cal_val) and cal_val else 0
 
-                                headline_html = (
-                                    f'{headline_value} <span style="font-size: 0.9rem; color: #fc4c02; font-weight: 700;">{headline_unit}</span> &nbsp;•&nbsp; {time_hms}'
-                                    if show_time else headline_value
-                                )
+                                # Tarjeta estilo Strava: icono de disciplina, título, píldora de esfuerzo, stats en fila
+                                stats = build_stat_row(sport, distance_km, time_hms, pace_speed, avg_hr, calories)
+                                stats_html = "".join(f'<div class="stat"><div class="v">{v}</div><div class="l">{l}</div></div>' for v, l in stats)
+                                rpe_pill_text = format_rpe_pill(perceived_effort, feeling)
 
-                                # Tarjeta de Actividad (color del borde según intensidad/RPE)
                                 st.markdown(f"""
-                                <div class="activity-card" style="border-left-color: {card_color};">
-                                    <div style="display: flex; justify-content: space-between; align-items: center;">
-                                        <span style="font-size: 1.15rem; font-weight: 700;">{sport_emoji} {activity.get('activityName', 'Entrenamiento')}</span>
-                                        <span style="color: #666; font-size: 0.85rem; font-weight: 500;">{activity['Date'].strftime('%a, %b %d')}</span>
+                                <div class="strava-card">
+                                    <div class="strava-top" style="--sport-color: {sport_color};">
+                                        <div class="icon-badge">{sport_emoji}</div>
+                                        <div class="who">
+                                            <div class="title">{title}</div>
+                                            <div class="meta">{activity['Date'].strftime('%a, %b %d')} · {training_type}</div>
+                                        </div>
+                                        <div class="rpe-pill" style="--pill-color: {card_color};">{rpe_pill_text}</div>
                                     </div>
-                                    <div style="font-size: 1.8rem; font-weight: 800; margin: 8px 0;">
-                                        {headline_html}
-                                    </div>
-                                    <div style="margin-bottom: 4px;">
-                                        <span class="badge-type">🏷️ {training_type}</span>
-                                    </div>
+                                    <div class="stat-row">{stats_html}</div>
                                 </div>
                                 """, unsafe_allow_html=True)
 
-                                # Métricas (Ritmo/HR/Calorías) + edición de RPE, Sensación y Comentario
-                                m_col1, m_col2, m_col3 = st.columns(3)
-                                m_col1.metric("⚡ Ritmo (Mov.)", pace_speed)
-                                m_col2.metric("❤️ FC Promedio", f"{avg_hr} bpm" if avg_hr > 0 else "—")
-                                m_col3.metric("🔥 Calorías", f"{calories} kcal" if calories > 0 else "—")
+                                if detail_key not in st.session_state:
+                                    st.session_state[detail_key] = False
 
-                                edit_col1, edit_col2, edit_col3 = st.columns([1, 1, 2])
-                                with edit_col1:
-                                    perceived_effort = st.slider("📊 Esfuerzo (RPE)", 0, 10, value=int(perceived_effort), key=rpe_key)
-                                with edit_col2:
-                                    feeling = st.selectbox("🎭 Sensación", FEELING_OPTIONS, index=FEELING_OPTIONS.index(feeling), key=feeling_key)
-                                with edit_col3:
-                                    comments = st.text_area("💬 Comentario", value=comments, key=comment_key, height=68)
+                                btn_label = "🔼 Ocultar detalle" if st.session_state[detail_key] else "🔍 Ver entrenamiento / intervalos"
+                                if st.button(btn_label, key=f"toggle_{activity_id}"):
+                                    st.session_state[detail_key] = not st.session_state[detail_key]
+                                    st.rerun()
+
+                                if st.session_state[detail_key]:
+                                    with st.container(border=True):
+                                        st.markdown("**✏️ Editar entreno**")
+                                        title = st.text_input("Título", value=title, key=title_key)
+                                        ec1, ec2 = st.columns(2)
+                                        with ec1:
+                                            perceived_effort = st.slider("📊 Esfuerzo (RPE)", 0, 10, value=int(perceived_effort), key=rpe_key)
+                                        with ec2:
+                                            feeling = st.selectbox("🎭 Sensación", FEELING_OPTIONS, index=FEELING_OPTIONS.index(feeling), key=feeling_key)
+                                        comments = st.text_area("💬 Comentario", value=comments, key=comment_key, height=68)
+
+                                        st.markdown("**📊 Intervalos / Series**")
+                                        laps = get_activity_splits(client, activity_id) if activity_id else []
+                                        if laps:
+                                            lap_rows = [format_lap_row(sport, lap) for lap in laps]
+                                            st.dataframe(pd.DataFrame(lap_rows), use_container_width=True, hide_index=True)
+                                        else:
+                                            st.caption("Esta actividad no tiene series/intervalos guardados en Garmin.")
 
                                 workout_entries.append({
                                     'sport': sport, 'sport_emoji': sport_emoji,
-                                    'activity_name': activity.get('activityName', 'Entrenamiento'),
+                                    'activity_name': title,
                                     'date': activity['Date'], 'headline_value': headline_value,
                                     'headline_unit': headline_unit, 'show_time': show_time,
                                     'time_hms': time_hms, 'pace_speed': pace_speed, 'training_type': training_type,

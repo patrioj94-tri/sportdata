@@ -332,6 +332,46 @@ def weekly_totals_by_sport(df_week, sports):
     return totals
 
 
+SPORT_COLORS = {'Ciclismo': '#fc4c02', 'Carrera': '#3b82f6', 'Natación': '#06b6d4', 'Fuerza': '#a855f7'}
+
+
+def build_stat_row(sport, distance_km, time_hms, pace_speed, avg_hr, calories):
+    """Las 4 estadísticas destacadas de la tarjeta de un entreno, adaptadas a la disciplina."""
+    hr_str = f"{avg_hr}" if avg_hr else "—"
+    cal_str = f"{calories}" if calories else "—"
+    if sport == 'Fuerza':
+        return [(time_hms, 'Duración'), (cal_str, 'Kcal'), (hr_str, 'FC media'), ('—', 'Ritmo')]
+    if sport == 'Natación':
+        return [(f"{distance_km * 1000:.0f}", 'Metros'), (time_hms, 'Tiempo'), (pace_speed, 'Ritmo /100m'), (cal_str, 'Kcal')]
+    unit_label = 'Velocidad' if sport == 'Ciclismo' else 'Ritmo /km'
+    return [(f"{distance_km:.2f}", 'Km'), (time_hms, 'Tiempo'), (pace_speed, unit_label), (hr_str, 'FC media')]
+
+
+def format_rpe_pill(rpe, feeling):
+    """Texto corto para la píldora de esfuerzo/sensación de la tarjeta."""
+    feeling_text = feeling.split(' ', 1)[-1] if feeling and feeling != 'Sin anotar' else ''
+    if rpe and feeling_text:
+        return f"RPE {rpe} · {feeling_text}"
+    if rpe:
+        return f"RPE {rpe}"
+    return feeling_text or 'Sin anotar'
+
+
+def format_lap_row(sport, lap):
+    """Da formato a un intervalo/serie (lap) de Garmin para mostrarlo en una tabla."""
+    distance_km = (lap.get('distance') or 0) / 1000.0
+    duration_min = (lap.get('duration') or 0) / 60.0
+    value, unit, _ = format_activity_headline(sport, distance_km, duration_min)
+    avg_hr = lap.get('averageHR')
+    return {
+        'Serie': lap.get('lapIndex', '—'),
+        'Distancia/Tiempo': f"{value} {unit}".strip(),
+        'Duración': format_time_hms(duration_min),
+        'Ritmo': calculate_pace_speed(sport, distance_km, duration_min),
+        'FC media': f"{int(avg_hr)} bpm" if avg_hr else '—',
+    }
+
+
 def build_week_calendar(df_week, selected_monday):
     """Para cada día Lun-Dom de la semana, qué deportes se practicaron (o ninguno)."""
     days = []
