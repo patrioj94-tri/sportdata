@@ -11,6 +11,9 @@ from garmin_data import (
     get_training_readiness_for_date,
     get_training_status_for_date,
     get_activity_splits,
+    set_activity_title,
+    set_activity_comment,
+    set_activity_evaluation,
 )
 from formatting import (
     get_last_monday,
@@ -37,6 +40,7 @@ from formatting import (
     format_rpe_pill,
     format_lap_row,
     delta_class,
+    FEELING_TO_GARMIN,
 )
 from pdf_report import build_weekly_report_pdf
 
@@ -582,6 +586,20 @@ if email and password:
                                 with ec3:
                                     feeling = st.selectbox("🎭 Sensación", FEELING_OPTIONS, index=FEELING_OPTIONS.index(feeling), key=feeling_key)
                                 comments = st.text_area("💬 Comentario", value=comments, key=comment_key, height=60)
+
+                                # Guardar de vuelta en Garmin para que no se pierda al cerrar la app
+                                if st.button("💾 Guardar en Garmin", key=f"save_{activity_id}"):
+                                    ok_title = set_activity_title(client, activity_id, title)
+                                    ok_comment = set_activity_comment(client, activity_id, comments)
+                                    ok_eval = set_activity_evaluation(
+                                        client, activity_id, perceived_effort, FEELING_TO_GARMIN.get(feeling)
+                                    )
+                                    if ok_title and ok_comment:
+                                        msg = "✅ Título y comentario guardados en tu Garmin."
+                                        msg += " RPE y sensación también." if ok_eval else " (El RPE/sensación no se pudo guardar en Garmin: se queda solo en esta sesión.)"
+                                        st.success(msg)
+                                    else:
+                                        st.error("No se pudo guardar en Garmin. Revisa tu conexión e inténtalo de nuevo.")
                             with intervals_tab:
                                 laps = get_activity_splits(client, activity_id) if activity_id else []
                                 if laps:

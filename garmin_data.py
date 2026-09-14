@@ -214,6 +214,47 @@ def get_activity_self_evaluation(_client, activity_id):
         return 0, None
 
 
+def set_activity_title(client, activity_id, title):
+    """Guarda el título de la actividad en Garmin Connect de verdad (no solo en la sesión).
+    Usa un método oficial y documentado de la librería."""
+    try:
+        client.set_activity_name(str(activity_id), title)
+        return True
+    except Exception:
+        return False
+
+
+def set_activity_comment(client, activity_id, comment):
+    """Guarda el comentario/descripción de la actividad en Garmin Connect de verdad.
+    Usa un método oficial y documentado de la librería."""
+    try:
+        client.set_activity_description(str(activity_id), comment)
+        return True
+    except Exception:
+        return False
+
+
+def set_activity_evaluation(client, activity_id, rpe, feel_raw):
+    """Intenta guardar el RPE y la sensación en Garmin Connect. A diferencia del título y el
+    comentario, esto NO es un endpoint oficial de la librería (Garmin no lo documenta
+    públicamente) — es el mismo endpoint que usa set_activity_name pero con los campos de
+    autoevaluación. Puede que Garmin lo rechace; si falla, el valor se queda solo en esta
+    sesión igual que antes, sin romper nada."""
+    try:
+        url = f"{client.garmin_connect_activity}/{activity_id}"
+        payload = {
+            "activityId": str(activity_id),
+            "summaryDTO": {
+                "directWorkoutRpe": int(rpe) * 10 if rpe else None,
+                "directWorkoutFeel": feel_raw,
+            },
+        }
+        client.client.put("connectapi", url, json=payload, api=True)
+        return True
+    except Exception:
+        return False
+
+
 @st.cache_data(ttl=1800, show_spinner=False)
 def get_activity_splits(_client, activity_id):
     """Devuelve los intervalos/series (laps) guardados en Garmin para una actividad, si los tiene."""

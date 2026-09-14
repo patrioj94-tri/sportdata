@@ -257,6 +257,16 @@ SPORT_EMOJIS = {'Ciclismo': '🚴‍♀️', 'Carrera': '🏃‍♀️', 'Nataci
 
 FEELING_OPTIONS = ['Sin anotar', '😫 Muy mal', '🙁 Mal', '😐 Normal', '🙂 Bien', '🔥 Excelente']
 
+# Valor numérico que Garmin usa internamente para la sensación (escala 0-100 en pasos de 25),
+# para poder devolvérsela al guardar.
+FEELING_TO_GARMIN = {
+    '😫 Muy mal': 0,
+    '🙁 Mal': 25,
+    '😐 Normal': 50,
+    '🙂 Bien': 75,
+    '🔥 Excelente': 100,
+}
+
 
 def format_activity_headline(sport, distance_km, duration_min):
     """Cada disciplina destaca la métrica que tiene sentido en su contexto:

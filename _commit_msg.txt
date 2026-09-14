@@ -1,0 +1,16 @@
+Guarda las ediciones de vuelta en Garmin para que no se pierdan
+
+Hasta ahora el titulo, RPE, sensacion y comentario solo vivian en la
+sesion del navegador: al cerrar la pestana o al reiniciarse la app se
+perdian. Ahora hay un boton "Guardar en Garmin" en la pestana Feedback
+de cada entreno:
+
+- Titulo y comentario se guardan en la actividad real de Garmin
+  Connect (metodos oficiales de la libreria: set_activity_name y
+  set_activity_description), asi que se ven tambien desde la app/web
+  de Garmin y siguen ahi dentro de un mes
+- RPE y sensacion se intentan guardar por el mismo endpoint, pero
+  Garmin no lo documenta publicamente: si falla, se avisa en pantalla
+  y el valor se queda solo en la sesion, sin romper nada
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
