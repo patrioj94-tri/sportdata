@@ -1,0 +1,245 @@
+"""Funciones puras de formato y de interpretación de los datos de Garmin."""
+import pandas as pd
+from datetime import datetime, timedelta
+
+from garmin_data import get_activity_self_evaluation
+
+
+def get_last_monday():
+    """Obtiene la fecha del último lunes (o hoy si es lunes)."""
+    today = datetime.now().date()
+    days_since_monday = today.weekday()
+    if days_since_monday == 0:
+        return today
+    else:
+        return today - timedelta(days=days_since_monday)
+
+
+def format_hours_minutes(hours_decimal):
+    """Convierte horas decimales (7.5) a formato '7h 30\'' """
+    if not hours_decimal:
+        return "0h 00'"
+    total_minutes = int(round(hours_decimal * 60))
+    hrs = total_minutes // 60
+    mins = total_minutes % 60
+    return f"{hrs}h {mins:02d}'"
+
+
+def format_time_hms(minutes):
+    """Convierte minutos a formato HH:MM:SS."""
+    if not minutes or minutes == 0:
+        return "0:00:00"
+    total_seconds = int(minutes * 60)
+    hours = total_seconds // 3600
+    remaining = total_seconds % 3600
+    mins = remaining // 60
+    secs = remaining % 60
+    if hours > 0:
+        return f"{hours}:{mins:02d}:{secs:02d}"
+    return f"{mins:02d}:{secs:02d}"
+
+
+def calculate_pace_speed(sport, distance_km, duration_min, moving_duration_min=None):
+    """Calcula el ritmo/velocidad utilizando preferentemente el tiempo en movimiento."""
+    active_duration = moving_duration_min if (moving_duration_min and moving_duration_min > 0) else duration_min
+
+    if not distance_km or distance_km <= 0 or not active_duration or active_duration <= 0:
+        return "—"
+
+    if sport == 'Ciclismo':
+        speed_kmh = distance_km / (active_duration / 60.0)
+        return f"{speed_kmh:.1f} km/h"
+
+    elif sport == 'Carrera':
+        pace_min_km = active_duration / distance_km
+        p_mins = int(pace_min_km)
+        p_secs = int(round((pace_min_km - p_mins) * 60))
+        if p_secs == 60:
+            p_mins += 1
+            p_secs = 0
+        return f"{p_mins}:{p_secs:02d} min/km"
+
+    elif sport == 'Natación':
+        distance_m = distance_km * 1000.0
+        pace_sec_100m = (active_duration * 60.0) / (distance_m / 100.0)
+        p_mins = int(pace_sec_100m // 60)
+        p_secs = int(round(pace_sec_100m % 60))
+        if p_secs == 60:
+            p_mins += 1
+            p_secs = 0
+        return f"{p_mins}:{p_secs:02d} /100m"
+
+    return "—"
+
+
+def get_training_type(activity):
+    """Extrae el tipo de entrenamiento explorando metadatos de Garmin."""
+    possible_sources = [
+        activity.get('workoutName'),
+        activity.get('trainingType'),
+        activity.get('eventType'),
+        activity.get('subTypeId'),
+        activity.get('activityType', {})
+    ]
+
+    name = str(activity.get('activityName', '')).lower()
+    if 'tempo' in name:
+        return 'Tempo'
+    elif 'series' in name or 'interval' in name or 'fartlek' in name:
+        return 'Intervals'
+    elif 'rodaje' in name or 'long' in name or 'tirada' in name:
+        return 'Long Run / Endurance'
+    elif 'recuperacion' in name or 'suave' in name or 'easy' in name:
+        return 'Recovery'
+
+    for src in possible_sources:
+        if isinstance(src, dict):
+            type_key = src.get('typeKey') or src.get('subTypeKey') or ''
+            if type_key and str(type_key).lower() not in ['uncategorized', 'generic', 'other']:
+                return str(type_key).replace('_', ' ').title()
+        elif isinstance(src, str) and src.strip():
+            if src.lower() not in ['n/a', 'none', 'uncategorized', 'generic', '9', '10']:
+                return src.replace('_', ' ').title()
+
+    return 'Regular Training'
+
+
+def get_perceived_effort_and_feeling(activity, client):
+    """Extrae el esfuerzo percibido (RPE) y la sensación en el entreno."""
+    eval_dict = activity.get('activityEvaluation', {}) or {}
+
+    effort = (
+        activity.get('perceivedExertion') or
+        activity.get('perceivedEffort') or
+        activity.get('effort') or
+        eval_dict.get('perceivedExertion') or
+        0
+    )
+
+    feeling_raw = (
+        activity.get('feeling') or
+        activity.get('feelingScore') or
+        eval_dict.get('feeling') or
+        ""
+    )
+
+    activity_id = activity.get('activityId')
+    if not effort and not feeling_raw and activity_id:
+        rpe, feel = get_activity_self_evaluation(client, activity_id)
+        if rpe:
+            effort = rpe
+        if feel is not None:
+            feeling_raw = feel
+
+    feeling_map = {
+        'VERY_WEAK': '😫 Muy mal',
+        'WEAK': '🙁 Mal',
+        'NORMAL': '😐 Normal',
+        'STRONG': '🙂 Bien',
+        'VERY_STRONG': '🔥 Excelente',
+        '1': '😫 Muy mal',
+        '2': '🙁 Mal',
+        '3': '😐 Normal',
+        '4': '🙂 Bien',
+        '5': '🔥 Excelente',
+        '0': '😫 Muy mal',
+        '25': '🙁 Mal',
+        '50': '😐 Normal',
+        '75': '🙂 Bien',
+        '100': '🔥 Excelente'
+    }
+
+    if isinstance(feeling_raw, (int, float)):
+        feeling_key = str(int(round(feeling_raw / 25.0) * 25)) if feeling_raw > 5 else str(int(feeling_raw))
+    else:
+        feeling_key = str(feeling_raw).upper()
+
+    feeling = feeling_map.get(feeling_key, feeling_raw if feeling_raw else None)
+
+    return int(effort) if effort else 0, feeling
+
+
+def get_activity_comments(activity):
+    """Extrae comentarios o descripción de la actividad."""
+    comment = (activity.get('description') or
+               activity.get('comment') or
+               activity.get('notes') or
+               '')
+
+    if pd.isna(comment):
+        return None
+
+    comment_str = str(comment).strip()
+    if comment_str.lower() in ['nan', 'none', '']:
+        return None
+
+    return comment_str
+
+
+def categorize_sport(activity):
+    """Categoriza la actividad en disciplina deportiva."""
+    activity_type = activity.get('activityType', {})
+    if isinstance(activity_type, dict):
+        type_key = activity_type.get('typeKey', '').lower()
+    else:
+        type_key = str(activity_type).lower()
+
+    if 'swimming' in type_key or 'pool' in type_key:
+        return 'Natación'
+    elif 'cycling' in type_key or 'bike' in type_key:
+        return 'Ciclismo'
+    elif 'running' in type_key or 'trail_run' in type_key:
+        return 'Carrera'
+    elif 'strength' in type_key or 'weight' in type_key:
+        return 'Fuerza'
+    else:
+        return 'Otro'
+
+
+# --- INTERPRETACIÓN DE TRAINING STATUS / READINESS DE GARMIN ---
+LEVEL_MAP = {
+    'PRIME': '🌟 Óptimo',
+    'HIGH': '💪 Alto',
+    'READY': '✅ Listo',
+    'MODERATE': '🙂 Moderado',
+    'LOW': '😕 Bajo',
+    'POOR': '😣 Pobre',
+    'VERY_HIGH': '🔥 Muy alto',
+}
+
+STATUS_LABELS = {
+    'PRODUCTIVE': ('📈 Productivo', 'Tu carga y tu recuperación están equilibradas: tu forma física está mejorando.'),
+    'PEAKING': ('🏆 En pico de forma', 'Estás en tu mejor momento de forma. Buen momento para competir.'),
+    'MAINTAINING': ('➡️ Manteniendo', 'Estás manteniendo tu nivel de forma actual.'),
+    'OVERREACHING': ('⚠️ Sobreentrenando', 'Tu carga es demasiado alta para tu recuperación actual. Considera bajar la intensidad.'),
+    'RECOVERY': ('😌 Recuperación', 'Tu cuerpo está recuperándose: la carga reciente ha sido baja.'),
+    'UNPRODUCTIVE': ('📉 Improductivo', 'Tu forma física está bajando a pesar del esfuerzo. Revisa tu descanso y nutrición.'),
+    'DETRAINING': ('📉 Perdiendo forma', 'Estás entrenando poco últimamente: tu forma física está bajando.'),
+    'NO_STATUS': ('❔ Sin datos suficientes', 'Garmin necesita más actividades para calcular tu estado de entrenamiento.'),
+}
+
+
+def extract_training_status_label(status_data):
+    """Busca de forma flexible la etiqueta de Training Status (Productive, Maintaining...)
+    dentro de la respuesta de Garmin, ya que su estructura anidada varía según cuenta/dispositivo."""
+    def find_label(obj):
+        if isinstance(obj, dict):
+            for v in obj.values():
+                result = find_label(v)
+                if result:
+                    return result
+        elif isinstance(obj, list):
+            for item in obj:
+                result = find_label(item)
+                if result:
+                    return result
+        elif isinstance(obj, str):
+            upper = obj.upper()
+            for key in STATUS_LABELS:
+                if key in upper:
+                    return STATUS_LABELS[key]
+        return None
+
+    if not status_data:
+        return None, None
+    return find_label(status_data) or (None, None)
