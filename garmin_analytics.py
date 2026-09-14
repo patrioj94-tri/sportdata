@@ -315,29 +315,22 @@ if email and password:
         with tab_weekly:
             st.markdown("# 📊 WEEKLY TRAINING REPORT")
 
-            if 'weekly_report_monday' not in st.session_state:
-                st.session_state.weekly_report_monday = get_last_monday()
-
             current_monday = get_last_monday()
-            selected_monday = st.session_state.weekly_report_monday
-            week_end = selected_monday + timedelta(days=6)
+            num_weeks = max(1, days // 7)
+            week_options = [current_monday - timedelta(weeks=i) for i in range(num_weeks)]
 
-            nav1, nav2, nav3 = st.columns([1, 3, 1])
-            with nav1:
-                if st.button("◀ Semana anterior", key="prev_week"):
-                    st.session_state.weekly_report_monday = selected_monday - timedelta(days=7)
-                    st.rerun()
-            with nav2:
-                st.markdown(f"<div style='text-align:center'>📅 <b>{selected_monday.strftime('%d %b')} → {week_end.strftime('%d %b, %Y')}</b></div>", unsafe_allow_html=True)
-                if selected_monday != current_monday:
-                    if st.button("↩️ Volver a esta semana", key="reset_week"):
-                        st.session_state.weekly_report_monday = current_monday
-                        st.rerun()
-            with nav3:
-                if selected_monday < current_monday:
-                    if st.button("Semana siguiente ▶", key="next_week"):
-                        st.session_state.weekly_report_monday = selected_monday + timedelta(days=7)
-                        st.rerun()
+            def _week_label(monday):
+                end = monday + timedelta(days=6)
+                label = f"{monday.strftime('%d %b')} – {end.strftime('%d %b %Y')}"
+                return f"{label}  (esta semana)" if monday == current_monday else label
+
+            selected_monday = st.selectbox(
+                "📅 Semana del informe",
+                options=week_options,
+                format_func=_week_label,
+                key="weekly_report_monday",
+            )
+            week_end = selected_monday + timedelta(days=6)
 
             # Contexto de forma del día (Training Readiness / Status de Garmin)
             if readiness.get('score') or status_label:
@@ -495,32 +488,32 @@ if email and password:
                                 </div>
                                 """, unsafe_allow_html=True)
 
+                                # Edición directa: título, RPE, sensación y comentario (sin clics de por medio)
+                                ec1, ec2, ec3 = st.columns([2, 1, 1])
+                                with ec1:
+                                    title = st.text_input("✏️ Título", value=title, key=title_key)
+                                with ec2:
+                                    perceived_effort = st.slider("📊 RPE", 0, 10, value=int(perceived_effort), key=rpe_key)
+                                with ec3:
+                                    feeling = st.selectbox("🎭 Sensación", FEELING_OPTIONS, index=FEELING_OPTIONS.index(feeling), key=feeling_key)
+                                comments = st.text_area("💬 Comentario", value=comments, key=comment_key, height=60)
+
+                                # Los intervalos/series solo se cargan y muestran al hacer clic
                                 if detail_key not in st.session_state:
                                     st.session_state[detail_key] = False
 
-                                btn_label = "🔼 Ocultar detalle" if st.session_state[detail_key] else "🔍 Ver entrenamiento / intervalos"
+                                btn_label = "🔼 Ocultar intervalos" if st.session_state[detail_key] else "📊 Ver intervalos / series"
                                 if st.button(btn_label, key=f"toggle_{activity_id}"):
                                     st.session_state[detail_key] = not st.session_state[detail_key]
                                     st.rerun()
 
                                 if st.session_state[detail_key]:
-                                    with st.container(border=True):
-                                        st.markdown("**✏️ Editar entreno**")
-                                        title = st.text_input("Título", value=title, key=title_key)
-                                        ec1, ec2 = st.columns(2)
-                                        with ec1:
-                                            perceived_effort = st.slider("📊 Esfuerzo (RPE)", 0, 10, value=int(perceived_effort), key=rpe_key)
-                                        with ec2:
-                                            feeling = st.selectbox("🎭 Sensación", FEELING_OPTIONS, index=FEELING_OPTIONS.index(feeling), key=feeling_key)
-                                        comments = st.text_area("💬 Comentario", value=comments, key=comment_key, height=68)
-
-                                        st.markdown("**📊 Intervalos / Series**")
-                                        laps = get_activity_splits(client, activity_id) if activity_id else []
-                                        if laps:
-                                            lap_rows = [format_lap_row(sport, lap) for lap in laps]
-                                            st.dataframe(pd.DataFrame(lap_rows), use_container_width=True, hide_index=True)
-                                        else:
-                                            st.caption("Esta actividad no tiene series/intervalos guardados en Garmin.")
+                                    laps = get_activity_splits(client, activity_id) if activity_id else []
+                                    if laps:
+                                        lap_rows = [format_lap_row(sport, lap) for lap in laps]
+                                        st.dataframe(pd.DataFrame(lap_rows), use_container_width=True, hide_index=True)
+                                    else:
+                                        st.caption("Esta actividad no tiene series/intervalos guardados en Garmin.")
 
                                 workout_entries.append({
                                     'sport': sport, 'sport_emoji': sport_emoji,
