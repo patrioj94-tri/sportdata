@@ -149,12 +149,17 @@ def get_perceived_effort_and_feeling(activity, client):
         '100': '🔥 Excelente'
     }
 
-    if isinstance(feeling_raw, (int, float)):
+    if isinstance(feeling_raw, float) and pd.isna(feeling_raw):
+        feeling_raw = None
+
+    if feeling_raw in (None, ""):
+        feeling = None
+    elif isinstance(feeling_raw, (int, float)):
         feeling_key = str(int(round(feeling_raw / 25.0) * 25)) if feeling_raw > 5 else str(int(feeling_raw))
+        feeling = feeling_map.get(feeling_key, feeling_raw)
     else:
         feeling_key = str(feeling_raw).upper()
-
-    feeling = feeling_map.get(feeling_key, feeling_raw if feeling_raw else None)
+        feeling = feeling_map.get(feeling_key, feeling_raw)
 
     return int(effort) if effort else 0, feeling
 
@@ -243,3 +248,62 @@ def extract_training_status_label(status_data):
     if not status_data:
         return None, None
     return find_label(status_data) or (None, None)
+
+
+# --- INFORME SEMANAL: helpers de agregación y presentación ---
+SPORT_EMOJIS = {'Ciclismo': '🚴‍♀️', 'Carrera': '🏃‍♀️', 'Natación': '🏊‍♀️', 'Fuerza': '🏋️‍♀️'}
+
+
+def get_intensity_color(rpe):
+    """Devuelve un color hex según la intensidad (RPE) de un entreno, para resaltar
+    visualmente las tarjetas de actividad: verde = fácil, rojo = muy duro."""
+    if not rpe or rpe <= 0:
+        return '#fc4c02'
+    if rpe <= 3:
+        return '#22c55e'
+    if rpe <= 6:
+        return '#f59e0b'
+    if rpe <= 8:
+        return '#ef4444'
+    return '#991b1b'
+
+
+def weekly_overall_totals(df_week):
+    """Distancia, sesiones y minutos totales de una semana (todas las disciplinas)."""
+    if df_week.empty:
+        return {'km': 0.0, 'sessions': 0, 'minutes': 0.0}
+    return {
+        'km': float(df_week['Distance_km'].sum()),
+        'sessions': len(df_week),
+        'minutes': float(df_week['Duration_min'].sum()),
+    }
+
+
+def weekly_totals_by_sport(df_week, sports):
+    """Distancia, sesiones y minutos totales de una semana, desglosados por disciplina."""
+    totals = {}
+    for sport in sports:
+        if df_week.empty or 'Sport' not in df_week.columns:
+            totals[sport] = {'km': 0.0, 'sessions': 0, 'minutes': 0.0}
+            continue
+        df_sport = df_week[df_week['Sport'] == sport]
+        totals[sport] = {
+            'km': float(df_sport['Distance_km'].sum()) if len(df_sport) else 0.0,
+            'sessions': len(df_sport),
+            'minutes': float(df_sport['Duration_min'].sum()) if len(df_sport) else 0.0,
+        }
+    return totals
+
+
+def build_week_calendar(df_week, selected_monday):
+    """Para cada día Lun-Dom de la semana, qué deportes se practicaron (o ninguno)."""
+    days = []
+    for offset in range(7):
+        day = selected_monday + timedelta(days=offset)
+        if df_week.empty or 'Sport' not in df_week.columns:
+            day_sports = []
+        else:
+            day_sports = df_week[df_week['Date'] == day]['Sport'].tolist()
+        emojis = [SPORT_EMOJIS.get(s, '⚡') for s in day_sports]
+        days.append({'date': day, 'emojis': emojis, 'count': len(day_sports)})
+    return days

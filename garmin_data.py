@@ -1,4 +1,5 @@
 """Capa de acceso a Garmin Connect: login, cacheo y extracción de datos crudos."""
+import hashlib
 import os
 import pandas as pd
 import streamlit as st
@@ -6,19 +7,28 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta
 from garminconnect import Garmin
 
-TOKEN_DIR = os.path.expanduser("~/.garminconnect")
+SESSIONS_ROOT = os.path.expanduser("~/.garminconnect_sessions")
+
+
+def _token_dir_for(email):
+    """Carpeta de sesión aislada por email: esta app la usan varias personas del
+    equipo, así que cada cuenta de Garmin debe tener su propio token guardado
+    (una carpeta compartida haría que una persona pudiera heredar la sesión de otra)."""
+    email_hash = hashlib.sha256(email.strip().lower().encode()).hexdigest()[:16]
+    return os.path.join(SESSIONS_ROOT, email_hash)
 
 
 @st.cache_resource(show_spinner=False)
 def get_garmin_client(email, password):
+    token_dir = _token_dir_for(email)
     try:
         client = Garmin(email, password)
         try:
-            client.login(TOKEN_DIR)
+            client.login(token_dir)
         except Exception:
             client.login()
-            os.makedirs(TOKEN_DIR, exist_ok=True)
-            client.garth.dump(TOKEN_DIR)
+            os.makedirs(token_dir, exist_ok=True)
+            client.garth.dump(token_dir)
         return client
     except Exception as e:
         st.sidebar.error(f"Authentication failed: {e}")

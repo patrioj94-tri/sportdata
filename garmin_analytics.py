@@ -22,6 +22,11 @@ from formatting import (
     categorize_sport,
     extract_training_status_label,
     LEVEL_MAP,
+    SPORT_EMOJIS,
+    get_intensity_color,
+    weekly_overall_totals,
+    weekly_totals_by_sport,
+    build_week_calendar,
 )
 from pdf_report import build_weekly_report_pdf
 
@@ -250,15 +255,52 @@ if email and password:
         with tab_weekly:
             st.markdown("# 📊 WEEKLY TRAINING REPORT")
 
-            last_monday = get_last_monday()
-            week_end = last_monday + timedelta(days=6)
-            st.caption(f"📅 {last_monday.strftime('%A, %B %d')} → {week_end.strftime('%A, %B %d, %Y')}")
+            if 'weekly_report_monday' not in st.session_state:
+                st.session_state.weekly_report_monday = get_last_monday()
+
+            current_monday = get_last_monday()
+            selected_monday = st.session_state.weekly_report_monday
+            week_end = selected_monday + timedelta(days=6)
+
+            nav1, nav2, nav3 = st.columns([1, 3, 1])
+            with nav1:
+                if st.button("◀ Semana anterior", key="prev_week"):
+                    st.session_state.weekly_report_monday = selected_monday - timedelta(days=7)
+                    st.rerun()
+            with nav2:
+                st.markdown(f"<div style='text-align:center'>📅 <b>{selected_monday.strftime('%d %b')} → {week_end.strftime('%d %b, %Y')}</b></div>", unsafe_allow_html=True)
+                if selected_monday != current_monday:
+                    if st.button("↩️ Volver a esta semana", key="reset_week"):
+                        st.session_state.weekly_report_monday = current_monday
+                        st.rerun()
+            with nav3:
+                if selected_monday < current_monday:
+                    if st.button("Semana siguiente ▶", key="next_week"):
+                        st.session_state.weekly_report_monday = selected_monday + timedelta(days=7)
+                        st.rerun()
+
+            # Contexto de forma del día (Training Readiness / Status de Garmin)
+            if readiness.get('score') or status_label:
+                rc1, rc2 = st.columns(2)
+                with rc1:
+                    if readiness.get('score'):
+                        st.metric("🎯 Training Readiness (hoy)", f"{readiness.get('score')}/100")
+                with rc2:
+                    if status_label:
+                        st.caption(f"{status_label} — {status_explanation}")
+
+            st.divider()
 
             if not df_acts.empty:
-                df_week = df_acts[df_acts['Date'] >= last_monday].copy()
+                df_week = df_acts[(df_acts['Date'] >= selected_monday) & (df_acts['Date'] <= week_end)].copy()
+                prev_monday = selected_monday - timedelta(days=7)
+                prev_week_end = selected_monday - timedelta(days=1)
+                df_prev_week = df_acts[(df_acts['Date'] >= prev_monday) & (df_acts['Date'] <= prev_week_end)].copy()
 
                 if len(df_week) > 0:
                     df_week['Sport'] = df_week.apply(categorize_sport, axis=1)
+                    if not df_prev_week.empty:
+                        df_prev_week['Sport'] = df_prev_week.apply(categorize_sport, axis=1)
 
                     if sleep_info and sleep_info.get('Total_Hours', 0) > 0:
                         sl1, sl2 = st.columns(2)
@@ -266,6 +308,29 @@ if email and password:
                             st.metric("😴 Avg Sleep per Night", format_hours_minutes(sleep_info.get('Total_Hours', 0)))
                         with sl2:
                             st.metric("⭐ Sleep Score", f"{sleep_info.get('Score', 'N/A')}/100")
+                        st.divider()
+
+                    # Tira de calendario Lun-Dom
+                    st.markdown("### 🗓️ Vista de la semana")
+                    calendar_days = build_week_calendar(df_week, selected_monday)
+                    cal_cols = st.columns(7)
+                    for col, day_info in zip(cal_cols, calendar_days):
+                        with col:
+                            st.markdown(f"**{day_info['date'].strftime('%a')}**")
+                            st.caption(day_info['date'].strftime('%d/%m'))
+                            st.markdown(" ".join(day_info['emojis']) if day_info['emojis'] else "💤")
+
+                    st.divider()
+
+                    # Resumen total de la semana, comparado con la anterior
+                    overall = weekly_overall_totals(df_week)
+                    overall_prev = weekly_overall_totals(df_prev_week)
+
+                    st.markdown("### 📦 RESUMEN TOTAL DE LA SEMANA")
+                    tot1, tot2, tot3 = st.columns(3)
+                    tot1.metric("Distancia total", f"{overall['km']:.1f} km", f"{overall['km'] - overall_prev['km']:+.1f} km vs. sem. ant.")
+                    tot2.metric("Tiempo total", format_hours_minutes(overall['minutes'] / 60), f"{(overall['minutes'] - overall_prev['minutes']) / 60:+.1f} h vs. sem. ant.")
+                    tot3.metric("Sesiones", f"{overall['sessions']}", f"{overall['sessions'] - overall_prev['sessions']:+d} vs. sem. ant.")
 
                     st.divider()
 
@@ -273,23 +338,22 @@ if email and password:
                     summary_cols = st.columns(4)
 
                     sports = ['Ciclismo', 'Carrera', 'Natación', 'Fuerza']
-                    sport_emojis = {'Ciclismo': '🚴‍♀️', 'Carrera': '🏃‍♀️', 'Natación': '🏊‍♀️', 'Fuerza': '🏋️‍♀️'}
+                    totals_by_sport = weekly_totals_by_sport(df_week, sports)
+                    prev_totals_by_sport = weekly_totals_by_sport(df_prev_week, sports)
 
                     for idx, sport in enumerate(sports):
-                        df_sport = df_week[df_week['Sport'] == sport]
-                        emoji = sport_emojis.get(sport, '⚡')
+                        emoji = SPORT_EMOJIS.get(sport, '⚡')
+                        t = totals_by_sport[sport]
+                        prev_t = prev_totals_by_sport[sport]
 
-                        if len(df_sport) > 0:
-                            total_km = df_sport['Distance_km'].sum()
-                            total_min = df_sport['Duration_min'].sum()
-                            total_hrs = int(total_min // 60)
-                            total_mins = int(total_min % 60)
-                            count = len(df_sport)
-
-                            with summary_cols[idx]:
-                                st.metric(f"{emoji} {sport}", f"{total_km:.1f} km", f"{count} ses. • {total_hrs}h {total_mins}m")
-                        else:
-                            with summary_cols[idx]:
+                        with summary_cols[idx]:
+                            if t['sessions'] > 0:
+                                delta_km = t['km'] - prev_t['km']
+                                st.metric(f"{emoji} {sport}", f"{t['km']:.1f} km", f"{delta_km:+.1f} km vs. sem. ant.")
+                                total_hrs = int(t['minutes'] // 60)
+                                total_mins = int(t['minutes'] % 60)
+                                st.caption(f"{t['sessions']} ses. • {total_hrs}h {total_mins}m")
+                            else:
                                 st.metric(f"{emoji} {sport}", "—", "No sessions")
 
                     st.divider()
@@ -297,76 +361,90 @@ if email and password:
                     st.markdown("### 🎯 WORKOUT LOG")
 
                     df_week_sorted = df_week.sort_values('Date', ascending=False)
+                    unique_days = sorted(df_week_sorted['Date'].unique(), reverse=True)
 
-                    for idx, (_, activity) in enumerate(df_week_sorted.iterrows()):
-                        sport = activity.get('Sport', 'Otro')
-                        sport_emoji = {'Natación': '🏊‍♀️', 'Ciclismo': '🚴‍♀️', 'Carrera': '🏃‍♀️', 'Fuerza': '🏋️‍♀️'}.get(sport, '⚡')
+                    for day_idx, day in enumerate(unique_days):
+                        day_acts = df_week_sorted[df_week_sorted['Date'] == day]
+                        day_label = day.strftime('%A, %d %b')
+                        n = len(day_acts)
+                        with st.expander(f"📅 {day_label} ({n} entreno{'s' if n != 1 else ''})", expanded=(day_idx == 0)):
+                            for act_idx, (_, activity) in enumerate(day_acts.iterrows()):
+                                sport = activity.get('Sport', 'Otro')
+                                sport_emoji = SPORT_EMOJIS.get(sport, '⚡')
 
-                        distance_km = activity.get('Distance_km', 0)
-                        duration_min = activity.get('Duration_min', 0)
-                        moving_duration_min = activity.get('MovingDuration_min', 0)
+                                distance_km = activity.get('Distance_km', 0)
+                                duration_min = activity.get('Duration_min', 0)
+                                moving_duration_min = activity.get('MovingDuration_min', 0)
 
-                        time_hms = format_time_hms(duration_min)
-                        pace_speed = calculate_pace_speed(sport, distance_km, duration_min, moving_duration_min)
-                        training_type = get_training_type(activity)
+                                time_hms = format_time_hms(duration_min)
+                                pace_speed = calculate_pace_speed(sport, distance_km, duration_min, moving_duration_min)
+                                training_type = get_training_type(activity)
 
-                        perceived_effort, feeling = get_perceived_effort_and_feeling(activity, client)
+                                perceived_effort, feeling = get_perceived_effort_and_feeling(activity, client)
+                                card_color = get_intensity_color(perceived_effort)
 
-                        avg_hr_val = activity.get('averageHR')
-                        avg_hr = int(avg_hr_val) if pd.notna(avg_hr_val) and avg_hr_val else 0
+                                avg_hr_val = activity.get('averageHR')
+                                avg_hr = int(avg_hr_val) if pd.notna(avg_hr_val) and avg_hr_val else 0
 
-                        cal_val = activity.get('Active_Calories')
-                        calories = int(cal_val) if pd.notna(cal_val) and cal_val else 0
+                                cal_val = activity.get('Active_Calories')
+                                calories = int(cal_val) if pd.notna(cal_val) and cal_val else 0
 
-                        comments = get_activity_comments(activity)
+                                comments = get_activity_comments(activity)
 
-                        # Tarjeta Limpia de Actividad
-                        st.markdown(f"""
-                        <div class="activity-card">
-                            <div style="display: flex; justify-content: space-between; align-items: center;">
-                                <span style="font-size: 1.15rem; font-weight: 700;">{sport_emoji} {activity.get('activityName', 'Entrenamiento')}</span>
-                                <span style="color: #666; font-size: 0.85rem; font-weight: 500;">{activity['Date'].strftime('%a, %b %d')}</span>
-                            </div>
-                            <div style="font-size: 1.8rem; font-weight: 800; margin: 8px 0;">
-                                {distance_km:.2f} <span style="font-size: 0.9rem; color: #fc4c02; font-weight: 700;">KM</span> &nbsp;•&nbsp; {time_hms}
-                            </div>
-                            <div style="margin-bottom: 4px;">
-                                <span class="badge-type">🏷️ {training_type}</span>
-                            </div>
-                        </div>
-                        """, unsafe_allow_html=True)
+                                # Tarjeta de Actividad (color del borde según intensidad/RPE)
+                                st.markdown(f"""
+                                <div class="activity-card" style="border-left-color: {card_color};">
+                                    <div style="display: flex; justify-content: space-between; align-items: center;">
+                                        <span style="font-size: 1.15rem; font-weight: 700;">{sport_emoji} {activity.get('activityName', 'Entrenamiento')}</span>
+                                        <span style="color: #666; font-size: 0.85rem; font-weight: 500;">{activity['Date'].strftime('%a, %b %d')}</span>
+                                    </div>
+                                    <div style="font-size: 1.8rem; font-weight: 800; margin: 8px 0;">
+                                        {distance_km:.2f} <span style="font-size: 0.9rem; color: #fc4c02; font-weight: 700;">KM</span> &nbsp;•&nbsp; {time_hms}
+                                    </div>
+                                    <div style="margin-bottom: 4px;">
+                                        <span class="badge-type">🏷️ {training_type}</span>
+                                    </div>
+                                </div>
+                                """, unsafe_allow_html=True)
 
-                        # Métricas adicionales (5 columnas con Esfuerzo Percibido y Sensación)
-                        m_col1, m_col2, m_col3, m_col4, m_col5 = st.columns(5)
+                                # Métricas adicionales (5 columnas con Esfuerzo Percibido y Sensación)
+                                m_col1, m_col2, m_col3, m_col4, m_col5 = st.columns(5)
 
-                        m_col1.metric("⚡ Ritmo (Mov.)", pace_speed)
-                        m_col2.metric("❤️ FC Promedio", f"{avg_hr} bpm" if avg_hr > 0 else "—")
-                        m_col3.metric("🔥 Calorías", f"{calories} kcal" if calories > 0 else "—")
-                        m_col4.metric("📊 Esfuerzo (RPE)", f"{perceived_effort}/10" if perceived_effort > 0 else "Sin anotar")
-                        m_col5.metric("🎭 Sensación", feeling if feeling else "Sin anotar")
+                                m_col1.metric("⚡ Ritmo (Mov.)", pace_speed)
+                                m_col2.metric("❤️ FC Promedio", f"{avg_hr} bpm" if avg_hr > 0 else "—")
+                                m_col3.metric("🔥 Calorías", f"{calories} kcal" if calories > 0 else "—")
+                                m_col4.metric("📊 Esfuerzo (RPE)", f"{perceived_effort}/10" if perceived_effort > 0 else "Sin anotar")
+                                m_col5.metric("🎭 Sensación", feeling if feeling else "Sin anotar")
 
-                        if comments:
-                            st.caption(f"💬 *\"{comments}\"*")
+                                if comments:
+                                    st.caption(f"💬 *\"{comments}\"*")
 
-                        st.divider()
+                                if act_idx < n - 1:
+                                    st.divider()
+
+                    st.divider()
 
                     # EXPORTACIÓN PDF
                     st.markdown("### 📥 Export Report")
 
                     if st.button("📄 Download Weekly Report as PDF", key="download_pdf"):
                         try:
-                            pdf_buffer = build_weekly_report_pdf(df_week_sorted, sleep_info, sports, last_monday, week_end)
+                            pdf_buffer = build_weekly_report_pdf(
+                                df_week_sorted, sleep_info, sports, selected_monday, week_end, client,
+                                readiness=readiness, status_label=status_label, status_explanation=status_explanation,
+                                prev_totals_by_sport=prev_totals_by_sport, overall=overall, overall_prev=overall_prev,
+                            )
 
                             st.download_button(
                                 label="✅ PDF Ready - Click to Download",
                                 data=pdf_buffer,
-                                file_name=f"Weekly_Report_{last_monday.strftime('%Y%m%d')}.pdf",
+                                file_name=f"Weekly_Report_{selected_monday.strftime('%Y%m%d')}.pdf",
                                 mime="application/pdf",
                                 key="pdf_download"
                             )
                             st.success("✅ PDF generated successfully!")
                         except ImportError:
-                            st.error("📦 Please install reportlab: `pip install reportlab`")
+                            st.error("📦 Please install reportlab and matplotlib: `pip install reportlab matplotlib`")
                         except Exception as e:
                             st.error(f"Error generating PDF: {e}")
                 else:
