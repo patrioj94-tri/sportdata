@@ -23,10 +23,14 @@ from formatting import (
     extract_training_status_label,
     LEVEL_MAP,
     SPORT_EMOJIS,
+    FEELING_OPTIONS,
     get_intensity_color,
     weekly_overall_totals,
     weekly_totals_by_sport,
     build_week_calendar,
+    format_activity_headline,
+    format_discipline_headline,
+    format_discipline_delta,
 )
 from pdf_report import build_weekly_report_pdf
 
@@ -289,6 +293,13 @@ if email and password:
                     if status_label:
                         st.caption(f"{status_label} — {status_explanation}")
 
+            health_comment = st.text_area(
+                "💬 Comentario sobre tu estado de salud/forma esta semana (aparecerá en el informe)",
+                value=st.session_state.get("health_comment", ""),
+                key="health_comment",
+                height=70,
+            )
+
             st.divider()
 
             if not df_acts.empty:
@@ -348,8 +359,9 @@ if email and password:
 
                         with summary_cols[idx]:
                             if t['sessions'] > 0:
-                                delta_km = t['km'] - prev_t['km']
-                                st.metric(f"{emoji} {sport}", f"{t['km']:.1f} km", f"{delta_km:+.1f} km vs. sem. ant.")
+                                headline = format_discipline_headline(sport, t['km'], t['minutes'])
+                                delta_text = format_discipline_delta(sport, t, prev_t)
+                                st.metric(f"{emoji} {sport}", headline, delta_text)
                                 total_hrs = int(t['minutes'] // 60)
                                 total_mins = int(t['minutes'] % 60)
                                 st.caption(f"{t['sessions']} ses. • {total_hrs}h {total_mins}m")
@@ -359,9 +371,11 @@ if email and password:
                     st.divider()
 
                     st.markdown("### 🎯 WORKOUT LOG")
+                    st.caption("Puedes corregir el RPE, la sensación y añadir un comentario antes de generar el informe.")
 
                     df_week_sorted = df_week.sort_values('Date', ascending=False)
                     unique_days = sorted(df_week_sorted['Date'].unique(), reverse=True)
+                    workout_entries = []
 
                     for day_idx, day in enumerate(unique_days):
                         day_acts = df_week_sorted[df_week_sorted['Date'] == day]
@@ -371,6 +385,7 @@ if email and password:
                             for act_idx, (_, activity) in enumerate(day_acts.iterrows()):
                                 sport = activity.get('Sport', 'Otro')
                                 sport_emoji = SPORT_EMOJIS.get(sport, '⚡')
+                                activity_id = activity.get('activityId')
 
                                 distance_km = activity.get('Distance_km', 0)
                                 duration_min = activity.get('Duration_min', 0)
@@ -379,8 +394,19 @@ if email and password:
                                 time_hms = format_time_hms(duration_min)
                                 pace_speed = calculate_pace_speed(sport, distance_km, duration_min, moving_duration_min)
                                 training_type = get_training_type(activity)
+                                headline_value, headline_unit, show_time = format_activity_headline(sport, distance_km, duration_min)
 
-                                perceived_effort, feeling = get_perceived_effort_and_feeling(activity, client)
+                                default_rpe, default_feeling = get_perceived_effort_and_feeling(activity, client)
+                                default_feeling_option = default_feeling if default_feeling in FEELING_OPTIONS else 'Sin anotar'
+                                default_comment = get_activity_comments(activity) or ''
+
+                                rpe_key = f"rpe_{activity_id}"
+                                feeling_key = f"feeling_{activity_id}"
+                                comment_key = f"comment_{activity_id}"
+
+                                perceived_effort = st.session_state.get(rpe_key, default_rpe)
+                                feeling = st.session_state.get(feeling_key, default_feeling_option)
+                                comments = st.session_state.get(comment_key, default_comment)
                                 card_color = get_intensity_color(perceived_effort)
 
                                 avg_hr_val = activity.get('averageHR')
@@ -389,7 +415,10 @@ if email and password:
                                 cal_val = activity.get('Active_Calories')
                                 calories = int(cal_val) if pd.notna(cal_val) and cal_val else 0
 
-                                comments = get_activity_comments(activity)
+                                headline_html = (
+                                    f'{headline_value} <span style="font-size: 0.9rem; color: #fc4c02; font-weight: 700;">{headline_unit}</span> &nbsp;•&nbsp; {time_hms}'
+                                    if show_time else headline_value
+                                )
 
                                 # Tarjeta de Actividad (color del borde según intensidad/RPE)
                                 st.markdown(f"""
@@ -399,7 +428,7 @@ if email and password:
                                         <span style="color: #666; font-size: 0.85rem; font-weight: 500;">{activity['Date'].strftime('%a, %b %d')}</span>
                                     </div>
                                     <div style="font-size: 1.8rem; font-weight: 800; margin: 8px 0;">
-                                        {distance_km:.2f} <span style="font-size: 0.9rem; color: #fc4c02; font-weight: 700;">KM</span> &nbsp;•&nbsp; {time_hms}
+                                        {headline_html}
                                     </div>
                                     <div style="margin-bottom: 4px;">
                                         <span class="badge-type">🏷️ {training_type}</span>
@@ -407,17 +436,29 @@ if email and password:
                                 </div>
                                 """, unsafe_allow_html=True)
 
-                                # Métricas adicionales (5 columnas con Esfuerzo Percibido y Sensación)
-                                m_col1, m_col2, m_col3, m_col4, m_col5 = st.columns(5)
-
+                                # Métricas (Ritmo/HR/Calorías) + edición de RPE, Sensación y Comentario
+                                m_col1, m_col2, m_col3 = st.columns(3)
                                 m_col1.metric("⚡ Ritmo (Mov.)", pace_speed)
                                 m_col2.metric("❤️ FC Promedio", f"{avg_hr} bpm" if avg_hr > 0 else "—")
                                 m_col3.metric("🔥 Calorías", f"{calories} kcal" if calories > 0 else "—")
-                                m_col4.metric("📊 Esfuerzo (RPE)", f"{perceived_effort}/10" if perceived_effort > 0 else "Sin anotar")
-                                m_col5.metric("🎭 Sensación", feeling if feeling else "Sin anotar")
 
-                                if comments:
-                                    st.caption(f"💬 *\"{comments}\"*")
+                                edit_col1, edit_col2, edit_col3 = st.columns([1, 1, 2])
+                                with edit_col1:
+                                    perceived_effort = st.slider("📊 Esfuerzo (RPE)", 0, 10, value=int(perceived_effort), key=rpe_key)
+                                with edit_col2:
+                                    feeling = st.selectbox("🎭 Sensación", FEELING_OPTIONS, index=FEELING_OPTIONS.index(feeling), key=feeling_key)
+                                with edit_col3:
+                                    comments = st.text_area("💬 Comentario", value=comments, key=comment_key, height=68)
+
+                                workout_entries.append({
+                                    'sport': sport, 'sport_emoji': sport_emoji,
+                                    'activity_name': activity.get('activityName', 'Entrenamiento'),
+                                    'date': activity['Date'], 'headline_value': headline_value,
+                                    'headline_unit': headline_unit, 'show_time': show_time,
+                                    'time_hms': time_hms, 'pace_speed': pace_speed, 'training_type': training_type,
+                                    'avg_hr': avg_hr, 'calories': calories, 'rpe': perceived_effort,
+                                    'feeling': feeling, 'comment': comments, 'card_color': card_color,
+                                })
 
                                 if act_idx < n - 1:
                                     st.divider()
@@ -430,7 +471,8 @@ if email and password:
                     if st.button("📄 Download Weekly Report as PDF", key="download_pdf"):
                         try:
                             pdf_buffer = build_weekly_report_pdf(
-                                df_week_sorted, sleep_info, sports, selected_monday, week_end, client,
+                                workout_entries, df_week, sleep_info, sports, selected_monday, week_end,
+                                health_comment=health_comment,
                                 readiness=readiness, status_label=status_label, status_explanation=status_explanation,
                                 prev_totals_by_sport=prev_totals_by_sport, overall=overall, overall_prev=overall_prev,
                             )

@@ -115,6 +115,8 @@ def get_perceived_effort_and_feeling(activity, client):
         eval_dict.get('perceivedExertion') or
         0
     )
+    if isinstance(effort, float) and pd.isna(effort):
+        effort = 0
 
     feeling_raw = (
         activity.get('feeling') or
@@ -253,6 +255,29 @@ def extract_training_status_label(status_data):
 # --- INFORME SEMANAL: helpers de agregación y presentación ---
 SPORT_EMOJIS = {'Ciclismo': '🚴‍♀️', 'Carrera': '🏃‍♀️', 'Natación': '🏊‍♀️', 'Fuerza': '🏋️‍♀️'}
 
+FEELING_OPTIONS = ['Sin anotar', '😫 Muy mal', '🙁 Mal', '😐 Normal', '🙂 Bien', '🔥 Excelente']
+
+
+def format_activity_headline(sport, distance_km, duration_min):
+    """Cada disciplina destaca la métrica que tiene sentido en su contexto:
+    natación en metros, fuerza en tiempo, carrera/ciclismo en km.
+    Devuelve (valor_principal, unidad, mostrar_tiempo_aparte)."""
+    if sport == 'Fuerza':
+        return format_time_hms(duration_min), '', False
+    if sport == 'Natación':
+        return f"{distance_km * 1000:.0f}", "M", True
+    return f"{distance_km:.2f}", "KM", True
+
+
+def format_discipline_headline(sport, km, minutes):
+    """Valor destacado por disciplina en los resúmenes semanales (mismo criterio
+    que format_activity_headline, pero para un total agregado)."""
+    if sport == 'Fuerza':
+        return format_hours_minutes(minutes / 60)
+    if sport == 'Natación':
+        return f"{km * 1000:.0f} m"
+    return f"{km:.1f} km"
+
 
 def get_intensity_color(rpe):
     """Devuelve un color hex según la intensidad (RPE) de un entreno, para resaltar
@@ -277,6 +302,18 @@ def weekly_overall_totals(df_week):
         'sessions': len(df_week),
         'minutes': float(df_week['Duration_min'].sum()),
     }
+
+
+def format_discipline_delta(sport, cur, prev):
+    """Texto de variación semanal para una disciplina, en la unidad que corresponda."""
+    if sport == 'Fuerza':
+        delta_min = cur['minutes'] - prev['minutes']
+        return f"{delta_min / 60:+.1f} h vs. sem. ant."
+    if sport == 'Natación':
+        delta_m = (cur['km'] - prev['km']) * 1000
+        return f"{delta_m:+.0f} m vs. sem. ant."
+    delta_km = cur['km'] - prev['km']
+    return f"{delta_km:+.1f} km vs. sem. ant."
 
 
 def weekly_totals_by_sport(df_week, sports):

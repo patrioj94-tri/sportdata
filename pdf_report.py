@@ -4,7 +4,6 @@ from io import BytesIO
 import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
-import pandas as pd
 from datetime import timedelta
 
 from reportlab.lib import colors
@@ -13,30 +12,20 @@ from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib.units import inch
 from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer, Image
 
-from formatting import (
-    format_hours_minutes,
-    format_time_hms,
-    calculate_pace_speed,
-    get_training_type,
-    get_perceived_effort_and_feeling,
-    get_activity_comments,
-    get_intensity_color,
-    weekly_totals_by_sport,
-    SPORT_EMOJIS,
-)
+from formatting import format_hours_minutes, weekly_totals_by_sport
 
 BRAND_ORANGE = colors.HexColor('#fc4c02')
 
 
-def _daily_distance_chart(df_week_sorted, selected_monday):
+def _daily_distance_chart(df_week, selected_monday):
     """Gráfico de barras con la distancia diaria de la semana, como imagen PNG."""
     days = [selected_monday + timedelta(days=i) for i in range(7)]
     daily_km = []
     for day in days:
-        if df_week_sorted.empty:
+        if df_week.empty:
             daily_km.append(0)
         else:
-            day_df = df_week_sorted[df_week_sorted['Date'] == day]
+            day_df = df_week[df_week['Date'] == day]
             daily_km.append(day_df['Distance_km'].sum() if len(day_df) else 0)
 
     fig, ax = plt.subplots(figsize=(6.2, 2.1), dpi=150)
@@ -69,33 +58,20 @@ def _header_footer(canvas, doc):
     canvas.restoreState()
 
 
-def _activity_card(activity, styles, client):
-    sport = activity.get('Sport', 'Otro')
-    sport_emoji = SPORT_EMOJIS.get(sport, '⚡')
-    distance_km = activity.get('Distance_km', 0)
-    duration_min = activity.get('Duration_min', 0)
-    moving_duration_min = activity.get('MovingDuration_min', 0)
-    time_hms = format_time_hms(duration_min)
-    pace_speed = calculate_pace_speed(sport, distance_km, duration_min, moving_duration_min)
-    training_type = get_training_type(activity)
+def _activity_card(entry, styles):
+    accent_color = colors.HexColor(entry['card_color'])
+    title_line = f"<b>{entry['sport_emoji']} {entry['activity_name']}</b> — {entry['date'].strftime('%a, %b %d')}"
 
-    perceived_effort, feeling = get_perceived_effort_and_feeling(activity, client)
-    accent_color = colors.HexColor(get_intensity_color(perceived_effort))
+    if entry['show_time']:
+        stats_line = f"{entry['headline_value']} {entry['headline_unit']} | {entry['time_hms']} | {entry['pace_speed']} | {entry['training_type']}"
+    else:
+        stats_line = f"{entry['headline_value']} | {entry['training_type']}"
 
-    avg_hr_val = activity.get('averageHR')
-    avg_hr = int(avg_hr_val) if pd.notna(avg_hr_val) and avg_hr_val else 0
-    cal_val = activity.get('Active_Calories')
-    calories = int(cal_val) if pd.notna(cal_val) and cal_val else 0
-
-    title_line = f"<b>{sport_emoji} {activity.get('activityName', 'Unnamed')}</b> — {activity['Date'].strftime('%a, %b %d')}"
-    stats_line = f"{distance_km:.2f} km | {time_hms} | {pace_speed} | {training_type}"
-    detail_line = f"FC: {avg_hr if avg_hr else '—'} bpm | Cal: {calories if calories else '—'} kcal | RPE: {perceived_effort if perceived_effort else '—'}/10 | {feeling or 'Sin anotar'}"
+    detail_line = f"FC: {entry['avg_hr'] if entry['avg_hr'] else '—'} bpm | Cal: {entry['calories'] if entry['calories'] else '—'} kcal | RPE: {entry['rpe'] if entry['rpe'] else '—'}/10 | {entry['feeling']}"
 
     cell_content = [Paragraph(f"{title_line}<br/>{stats_line}<br/>{detail_line}", styles['Normal'])]
-
-    comments = get_activity_comments(activity)
-    if comments:
-        cell_content.append(Paragraph(f'<i>"{comments}"</i>', styles['Normal']))
+    if entry['comment']:
+        cell_content.append(Paragraph(f'<i>"{entry["comment"]}"</i>', styles['Normal']))
 
     table = Table([[cell_content]], colWidths=[6.5 * inch])
     table.setStyle(TableStyle([
@@ -108,15 +84,16 @@ def _activity_card(activity, styles, client):
     return table
 
 
-def build_weekly_report_pdf(df_week_sorted, sleep_info, sports, selected_monday, week_end, client,
-                             readiness=None, status_label=None, status_explanation=None,
+def build_weekly_report_pdf(workout_entries, df_week, sleep_info, sports, selected_monday, week_end,
+                             health_comment=None, readiness=None, status_label=None, status_explanation=None,
                              prev_totals_by_sport=None, overall=None, overall_prev=None):
-    """Construye el PDF del informe semanal y devuelve un BytesIO listo para descargar."""
+    """Construye el PDF del informe semanal y devuelve un BytesIO listo para descargar.
+    workout_entries ya trae el RPE/sensación/comentario tal como los haya editado el usuario."""
     readiness = readiness or {}
     prev_totals_by_sport = prev_totals_by_sport or {s: {'km': 0.0, 'sessions': 0, 'minutes': 0.0} for s in sports}
     overall = overall or {'km': 0.0, 'sessions': 0, 'minutes': 0.0}
     overall_prev = overall_prev or {'km': 0.0, 'sessions': 0, 'minutes': 0.0}
-    totals_by_sport = weekly_totals_by_sport(df_week_sorted, sports)
+    totals_by_sport = weekly_totals_by_sport(df_week, sports)
 
     pdf_buffer = BytesIO()
     doc = SimpleDocTemplate(pdf_buffer, pagesize=A4, topMargin=0.9 * inch, bottomMargin=0.7 * inch)
@@ -137,7 +114,7 @@ def build_weekly_report_pdf(df_week_sorted, sleep_info, sports, selected_monday,
     story.append(Spacer(1, 0.25 * inch))
 
     # Gráfico de distancia diaria
-    story.append(Image(_daily_distance_chart(df_week_sorted, selected_monday), width=6.2 * inch, height=2.1 * inch))
+    story.append(Image(_daily_distance_chart(df_week, selected_monday), width=6.2 * inch, height=2.1 * inch))
     story.append(Spacer(1, 0.25 * inch))
 
     # Training Readiness / Status
@@ -155,6 +132,12 @@ def build_weekly_report_pdf(df_week_sorted, sleep_info, sports, selected_monday,
         if feedback:
             lines.append(feedback)
         story.append(Paragraph("<br/>".join(lines), styles['Normal']))
+        story.append(Spacer(1, 0.25 * inch))
+
+    # Comentario de la semana (editado por el usuario)
+    if health_comment:
+        story.append(Paragraph("Comentario de la Semana", styles['Heading2']))
+        story.append(Paragraph(health_comment, styles['Normal']))
         story.append(Spacer(1, 0.25 * inch))
 
     # Resumen de sueño
@@ -202,12 +185,16 @@ def build_weekly_report_pdf(df_week_sorted, sleep_info, sports, selected_monday,
     story.append(Spacer(1, 0.3 * inch))
 
     story.append(Paragraph("Comparativa por Disciplina", styles['Heading2']))
-    comp_data = [['Sport', 'Esta semana (km)', 'Semana anterior (km)', 'Diferencia']]
+    comp_data = [['Sport', 'Esta semana', 'Semana anterior', 'Diferencia']]
     for sport in sports:
-        cur = totals_by_sport.get(sport, {'km': 0.0})
-        prev = prev_totals_by_sport.get(sport, {'km': 0.0})
-        diff = cur['km'] - prev['km']
-        comp_data.append([sport, f"{cur['km']:.1f}", f"{prev['km']:.1f}", f"{diff:+.1f}"])
+        cur = totals_by_sport.get(sport, {'km': 0.0, 'minutes': 0.0})
+        prev = prev_totals_by_sport.get(sport, {'km': 0.0, 'minutes': 0.0})
+        if sport == 'Fuerza':
+            comp_data.append([sport, format_hours_minutes(cur['minutes'] / 60), format_hours_minutes(prev['minutes'] / 60), f"{(cur['minutes'] - prev['minutes']) / 60:+.1f} h"])
+        elif sport == 'Natación':
+            comp_data.append([sport, f"{cur['km'] * 1000:.0f} m", f"{prev['km'] * 1000:.0f} m", f"{(cur['km'] - prev['km']) * 1000:+.0f} m"])
+        else:
+            comp_data.append([sport, f"{cur['km']:.1f} km", f"{prev['km']:.1f} km", f"{cur['km'] - prev['km']:+.1f} km"])
 
     comp_table = Table(comp_data, colWidths=[1.5 * inch, 1.6 * inch, 1.6 * inch, 1.3 * inch], repeatRows=1)
     comp_table.setStyle(TableStyle([
@@ -225,8 +212,8 @@ def build_weekly_report_pdf(df_week_sorted, sleep_info, sports, selected_monday,
 
     story.append(Paragraph("Workout Details", styles['Heading2']))
     story.append(Spacer(1, 0.1 * inch))
-    for _, activity in df_week_sorted.iterrows():
-        story.append(_activity_card(activity, styles, client))
+    for entry in workout_entries:
+        story.append(_activity_card(entry, styles))
         story.append(Spacer(1, 0.12 * inch))
 
     doc.build(story, onFirstPage=_header_footer, onLaterPages=_header_footer)
