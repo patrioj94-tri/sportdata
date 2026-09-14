@@ -383,14 +383,19 @@ def format_lap_row(sport, lap):
 
 
 def build_week_calendar(df_week, selected_monday):
-    """Para cada día Lun-Dom de la semana, qué deportes se practicaron (o ninguno)."""
+    """Para cada día Lun-Dom de la semana, qué deportes se practicaron (o ninguno).
+    'entries' trae (emoji, activity_id) por actividad, para poder enlazar cada icono
+    directamente a su tarjeta en el listado de entrenos."""
     days = []
     for offset in range(7):
         day = selected_monday + timedelta(days=offset)
         if df_week.empty or 'Sport' not in df_week.columns:
-            day_sports = []
+            day_acts = df_week.iloc[0:0]
         else:
-            day_sports = df_week[df_week['Date'] == day]['Sport'].tolist()
-        emojis = [SPORT_EMOJIS.get(s, '⚡') for s in day_sports]
-        days.append({'date': day, 'emojis': emojis, 'count': len(day_sports)})
+            day_acts = df_week[df_week['Date'] == day]
+        entries = [
+            (SPORT_EMOJIS.get(row.get('Sport'), '⚡'), row.get('activityId'))
+            for _, row in day_acts.iterrows()
+        ]
+        days.append({'date': day, 'entries': entries, 'count': len(entries)})
     return days

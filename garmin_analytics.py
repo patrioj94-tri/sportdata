@@ -2,14 +2,14 @@ import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
 import streamlit as st
-from datetime import timedelta
+from datetime import datetime, timedelta
 
 from garmin_data import (
     get_garmin_client,
     load_all_garmin_data,
     compute_training_load,
-    get_training_readiness_today,
-    get_training_status_today,
+    get_training_readiness_for_date,
+    get_training_status_for_date,
     get_activity_splits,
 )
 from formatting import (
@@ -188,8 +188,9 @@ if email and password:
     if client:
         df_health, sleep_info, hrv_data, respiration_data, df_acts = load_all_garmin_data(client, days, user_key=email)
         df_load = compute_training_load(df_acts, days)
-        readiness = get_training_readiness_today(client, user_key=email)
-        training_status_raw = get_training_status_today(client, user_key=email)
+        today = datetime.now().date()
+        readiness = get_training_readiness_for_date(client, today.isoformat(), user_key=email)
+        training_status_raw = get_training_status_for_date(client, today.isoformat(), user_key=email)
         status_label, status_explanation = extract_training_status_label(training_status_raw)
 
         # MÉTICAS GLOBALES
@@ -370,7 +371,7 @@ if email and password:
 
         # TAB 8: INFORME SEMANAL DETALLADO
         with tab_weekly:
-            st.markdown("# 🎉 ¡Así ha sido tu semana!")
+            st.markdown("# 📊 WEEKLY TRAINING REPORT")
 
             current_monday = get_last_monday()
             num_weeks = max(1, days // 7)
@@ -388,21 +389,26 @@ if email and password:
                 key="weekly_report_monday",
             )
             week_end = selected_monday + timedelta(days=6)
-
-            # Contexto de forma del día (Training Readiness / Status de Garmin).
-            # Estos datos son siempre "de hoy" (Garmin no guarda un histórico por semana),
-            # así que solo tiene sentido mostrarlos si estás viendo la semana actual.
             is_current_week = selected_monday == current_monday
-            if is_current_week and (readiness.get('score') or status_label):
+
+            # Training Readiness / Status de Garmin para la fecha de referencia de esta semana.
+            # Garmin sí guarda esto por día, así que para una semana pasada se pide el último
+            # día de esa semana; para la semana actual se pide hoy.
+            today = datetime.now().date()
+            readiness_date = today if is_current_week else week_end
+            week_readiness = get_training_readiness_for_date(client, readiness_date.isoformat(), user_key=email)
+            week_status_raw = get_training_status_for_date(client, readiness_date.isoformat(), user_key=email)
+            week_status_label, week_status_explanation = extract_training_status_label(week_status_raw)
+
+            if week_readiness.get('score') or week_status_label:
                 rc1, rc2 = st.columns(2)
                 with rc1:
-                    if readiness.get('score'):
-                        st.metric("🎯 Training Readiness (hoy)", f"{readiness.get('score')}/100")
+                    if week_readiness.get('score'):
+                        rlabel = "🎯 Training Readiness (hoy)" if is_current_week else f"🎯 Training Readiness ({readiness_date.strftime('%d %b')})"
+                        st.metric(rlabel, f"{week_readiness.get('score')}/100")
                 with rc2:
-                    if status_label:
-                        st.caption(f"{status_label} — {status_explanation}")
-            elif not is_current_week:
-                st.caption("🎯 El Training Readiness y el estado de forma solo se muestran para la semana actual.")
+                    if week_status_label:
+                        st.caption(f"{week_status_label} — {week_status_explanation}")
 
             health_comment = st.text_area(
                 "💬 Comentario sobre tu estado de salud/forma esta semana (aparecerá en el informe)",
@@ -424,84 +430,63 @@ if email and password:
                     if not df_prev_week.empty:
                         df_prev_week['Sport'] = df_prev_week.apply(categorize_sport, axis=1)
 
-                    # El sueño registrado es siempre el de la noche más reciente (Garmin no nos
-                    # da un histórico por día aquí), así que solo se muestra en la semana actual.
-                    if is_current_week and sleep_info and sleep_info.get('Total_Hours', 0) > 0:
-                        sl1, sl2 = st.columns(2)
-                        with sl1:
-                            st.metric("😴 Sueño de anoche", format_hours_minutes(sleep_info.get('Total_Hours', 0)))
-                        with sl2:
-                            st.metric("⭐ Sleep Score", f"{sleep_info.get('Score', 'N/A')}/100")
-                        st.divider()
+                    # Sueño medio de esa semana (a partir del histórico diario; ya no depende
+                    # de "la última noche", así que funciona también para semanas pasadas).
+                    week_sleep_summary = {}
+                    if not df_health.empty:
+                        week_health = df_health[(df_health['Date'].dt.date >= selected_monday) & (df_health['Date'].dt.date <= week_end)]
+                        week_sleep = week_health['Sleep_Hours'].dropna() if 'Sleep_Hours' in week_health else pd.Series(dtype=float)
+                        week_sleep_score = week_health['Sleep_Score'].dropna() if 'Sleep_Score' in week_health else pd.Series(dtype=float)
+                        if len(week_sleep) > 0:
+                            week_sleep_summary = {'Total_Hours': week_sleep.mean(), 'Score': f"{week_sleep_score.mean():.0f}" if len(week_sleep_score) > 0 else 'N/A'}
+                            sl1, sl2 = st.columns(2)
+                            with sl1:
+                                st.metric("😴 Sueño medio esa semana", format_hours_minutes(week_sleep_summary['Total_Hours']))
+                            with sl2:
+                                if len(week_sleep_score) > 0:
+                                    st.metric("⭐ Sleep Score medio", f"{week_sleep_summary['Score']}/100")
+                            st.divider()
 
-                    # Resumen visual: stickers de la semana + tarjetas grandes + donut por disciplina
+                    # Tira de calendario Lun-Dom: haz clic en un icono para ir directo a esa actividad
+                    st.markdown("### 🗓️ Vista de la semana")
+                    calendar_days = build_week_calendar(df_week, selected_monday)
+                    cal_cols = st.columns(7)
+                    for col, day_info in zip(cal_cols, calendar_days):
+                        with col:
+                            st.markdown(f"**{day_info['date'].strftime('%a')}**")
+                            st.caption(day_info['date'].strftime('%d/%m'))
+                            if day_info['entries']:
+                                links = " ".join(
+                                    f'<a href="#activity-{aid}" style="text-decoration:none;">{emoji}</a>'
+                                    for emoji, aid in day_info['entries']
+                                )
+                                st.markdown(f'<div class="sticker-row">{links}</div>', unsafe_allow_html=True)
+                            else:
+                                st.markdown('<div class="sticker-row">💤</div>', unsafe_allow_html=True)
+
+                    st.divider()
+
+                    # Resumen total de la semana, comparado con la anterior
                     overall = weekly_overall_totals(df_week)
                     overall_prev = weekly_overall_totals(df_prev_week)
 
-                    st.markdown("### 🗓️ Tu semana en un vistazo")
-                    calendar_days = build_week_calendar(df_week, selected_monday)
-                    sticker_line = " ".join(
-                        (" ".join(d['emojis']) if d['emojis'] else "💤") for d in calendar_days
-                    )
-                    day_labels = " &nbsp;&nbsp; ".join(d['date'].strftime('%a') for d in calendar_days)
-                    st.markdown(f'<div class="sticker-row">{sticker_line}</div>', unsafe_allow_html=True)
-                    st.caption(day_labels)
+                    st.markdown("### 📦 RESUMEN TOTAL DE LA SEMANA")
+                    tot1, tot2, tot3 = st.columns(3)
+                    tot1.metric("Distancia total", f"{overall['km']:.1f} km", f"{overall['km'] - overall_prev['km']:+.1f} km vs. sem. ant.")
+                    tot2.metric("Tiempo total", format_hours_minutes(overall['minutes'] / 60), f"{(overall['minutes'] - overall_prev['minutes']) / 60:+.1f} h vs. sem. ant.")
+                    tot3.metric("Sesiones", f"{overall['sessions']}", f"{overall['sessions'] - overall_prev['sessions']:+d} vs. sem. ant.")
 
-                    hero_col, donut_col = st.columns([3, 2])
-                    with hero_col:
-                        km_delta = overall['km'] - overall_prev['km']
-                        h_delta = (overall['minutes'] - overall_prev['minutes']) / 60
-                        ses_delta = overall['sessions'] - overall_prev['sessions']
+                    st.divider()
 
-                        st.markdown(f"""
-                        <div class="week-hero">
-                            <div class="hero-tile">
-                                <div class="hero-icon">🔥</div>
-                                <div class="hero-value">{overall['km']:.1f} km</div>
-                                <div class="hero-label">Distancia total</div>
-                                <div class="hero-delta {delta_class(km_delta)}">{'▲' if km_delta > 0.05 else '▼' if km_delta < -0.05 else '→'} {km_delta:+.1f} km</div>
-                            </div>
-                            <div class="hero-tile">
-                                <div class="hero-icon">⏱️</div>
-                                <div class="hero-value">{format_hours_minutes(overall['minutes'] / 60)}</div>
-                                <div class="hero-label">Tiempo total</div>
-                                <div class="hero-delta {delta_class(h_delta)}">{'▲' if h_delta > 0.05 else '▼' if h_delta < -0.05 else '→'} {h_delta:+.1f} h</div>
-                            </div>
-                            <div class="hero-tile">
-                                <div class="hero-icon">🎉</div>
-                                <div class="hero-value">{overall['sessions']}</div>
-                                <div class="hero-label">Entrenos</div>
-                                <div class="hero-delta {delta_class(ses_delta)}">{'▲' if ses_delta > 0 else '▼' if ses_delta < 0 else '→'} {ses_delta:+d}</div>
-                            </div>
-                        </div>
-                        """, unsafe_allow_html=True)
+                    st.markdown("### 💪 WEEKLY TOTALS BY DISCIPLINE")
+                    summary_cols = st.columns(4)
 
                     sports = ['Ciclismo', 'Carrera', 'Natación', 'Fuerza']
                     totals_by_sport = weekly_totals_by_sport(df_week, sports)
                     prev_totals_by_sport = weekly_totals_by_sport(df_prev_week, sports)
 
-                    with donut_col:
-                        active_sports = {s: totals_by_sport[s]['minutes'] for s in sports if totals_by_sport[s]['sessions'] > 0}
-                        if active_sports:
-                            fig_donut = px.pie(
-                                names=list(active_sports.keys()), values=list(active_sports.values()),
-                                hole=0.6, color=list(active_sports.keys()), color_discrete_map=SPORT_COLORS,
-                            )
-                            fig_donut.update_traces(textinfo='percent', textfont_size=13, showlegend=True)
-                            fig_donut.update_layout(
-                                height=220, margin=dict(t=10, b=10, l=10, r=10),
-                                legend=dict(orientation="h", yanchor="bottom", y=-0.15, x=0.5, xanchor="center"),
-                            )
-                            st.plotly_chart(fig_donut, use_container_width=True)
-                        else:
-                            st.caption("Todavía no hay entrenos esta semana para el gráfico 📉")
-
-                    st.markdown("### 🏅 Por disciplina")
-                    summary_cols = st.columns(4)
-
                     for idx, sport in enumerate(sports):
                         emoji = SPORT_EMOJIS.get(sport, '⚡')
-                        sport_color = SPORT_COLORS.get(sport, '#fc4c02')
                         t = totals_by_sport[sport]
                         prev_t = prev_totals_by_sport[sport]
 
@@ -509,29 +494,17 @@ if email and password:
                             if t['sessions'] > 0:
                                 headline = format_discipline_headline(sport, t['km'], t['minutes'])
                                 delta_text = format_discipline_delta(sport, t, prev_t)
-                                diff_value = t['minutes'] - prev_t['minutes'] if sport == 'Fuerza' else t['km'] - prev_t['km']
-                                st.markdown(f"""
-                                <div class="discipline-tile">
-                                    <div class="icon-badge" style="--sport-color: {sport_color};">{emoji}</div>
-                                    <div class="d-value">{headline}</div>
-                                    <div class="d-label">{sport} · {t['sessions']} ses.</div>
-                                    <div class="d-delta {delta_class(diff_value)}">{delta_text}</div>
-                                </div>
-                                """, unsafe_allow_html=True)
+                                st.metric(f"{emoji} {sport}", headline, delta_text)
+                                total_hrs = int(t['minutes'] // 60)
+                                total_mins = int(t['minutes'] % 60)
+                                st.caption(f"{t['sessions']} ses. • {total_hrs}h {total_mins}m")
                             else:
-                                st.markdown(f"""
-                                <div class="discipline-tile">
-                                    <div class="icon-badge" style="--sport-color: #ccc;">{emoji}</div>
-                                    <div class="d-value">—</div>
-                                    <div class="d-label">{sport}</div>
-                                    <div class="d-delta neutral">Sin entrenos</div>
-                                </div>
-                                """, unsafe_allow_html=True)
+                                st.metric(f"{emoji} {sport}", "—", "No sessions")
 
                     st.divider()
 
-                    st.markdown("### 📸 Tus entrenos")
-                    st.caption("Toca los campos para corregir el RPE, la sensación o añadir un comentario antes de generar el informe.")
+                    st.markdown("### 🎯 WORKOUT LOG")
+                    st.caption("Edita el RPE, la sensación o el comentario en la pestaña Feedback de cada entreno; los intervalos están en su propia pestaña.")
 
                     df_week_sorted = df_week.sort_values('Date', ascending=False)
                     unique_days = sorted(df_week_sorted['Date'].unique(), reverse=True)
@@ -541,65 +514,66 @@ if email and password:
                         day_acts = df_week_sorted[df_week_sorted['Date'] == day]
                         day_label = day.strftime('%A, %d %b')
                         n = len(day_acts)
-                        with st.expander(f"📅 {day_label} ({n} entreno{'s' if n != 1 else ''})", expanded=(day_idx == 0)):
-                            for act_idx, (_, activity) in enumerate(day_acts.iterrows()):
-                                sport = activity.get('Sport', 'Otro')
-                                sport_emoji = SPORT_EMOJIS.get(sport, '⚡')
-                                sport_color = SPORT_COLORS.get(sport, '#fc4c02')
-                                activity_id = activity.get('activityId')
+                        st.markdown(f"#### 📅 {day_label}")
+                        for act_idx, (_, activity) in enumerate(day_acts.iterrows()):
+                            sport = activity.get('Sport', 'Otro')
+                            sport_emoji = SPORT_EMOJIS.get(sport, '⚡')
+                            sport_color = SPORT_COLORS.get(sport, '#fc4c02')
+                            activity_id = activity.get('activityId')
 
-                                distance_km = activity.get('Distance_km', 0)
-                                duration_min = activity.get('Duration_min', 0)
-                                moving_duration_min = activity.get('MovingDuration_min', 0)
+                            distance_km = activity.get('Distance_km', 0)
+                            duration_min = activity.get('Duration_min', 0)
+                            moving_duration_min = activity.get('MovingDuration_min', 0)
 
-                                time_hms = format_time_hms(duration_min)
-                                pace_speed = calculate_pace_speed(sport, distance_km, duration_min, moving_duration_min)
-                                training_type = get_training_type(activity)
-                                headline_value, headline_unit, show_time = format_activity_headline(sport, distance_km, duration_min)
+                            time_hms = format_time_hms(duration_min)
+                            pace_speed = calculate_pace_speed(sport, distance_km, duration_min, moving_duration_min)
+                            training_type = get_training_type(activity)
+                            headline_value, headline_unit, show_time = format_activity_headline(sport, distance_km, duration_min)
 
-                                default_rpe, default_feeling = get_perceived_effort_and_feeling(activity, client)
-                                default_feeling_option = default_feeling if default_feeling in FEELING_OPTIONS else 'Sin anotar'
-                                default_comment = get_activity_comments(activity) or ''
-                                default_title = activity.get('activityName', 'Entrenamiento')
+                            default_rpe, default_feeling = get_perceived_effort_and_feeling(activity, client)
+                            default_feeling_option = default_feeling if default_feeling in FEELING_OPTIONS else 'Sin anotar'
+                            default_comment = get_activity_comments(activity) or ''
+                            default_title = activity.get('activityName', 'Entrenamiento')
 
-                                rpe_key = f"rpe_{activity_id}"
-                                feeling_key = f"feeling_{activity_id}"
-                                comment_key = f"comment_{activity_id}"
-                                title_key = f"title_{activity_id}"
-                                detail_key = f"show_detail_{activity_id}"
+                            rpe_key = f"rpe_{activity_id}"
+                            feeling_key = f"feeling_{activity_id}"
+                            comment_key = f"comment_{activity_id}"
+                            title_key = f"title_{activity_id}"
 
-                                perceived_effort = st.session_state.get(rpe_key, default_rpe)
-                                feeling = st.session_state.get(feeling_key, default_feeling_option)
-                                comments = st.session_state.get(comment_key, default_comment)
-                                title = st.session_state.get(title_key, default_title)
-                                card_color = get_intensity_color(perceived_effort)
+                            perceived_effort = st.session_state.get(rpe_key, default_rpe)
+                            feeling = st.session_state.get(feeling_key, default_feeling_option)
+                            comments = st.session_state.get(comment_key, default_comment)
+                            title = st.session_state.get(title_key, default_title)
+                            card_color = get_intensity_color(perceived_effort)
 
-                                avg_hr_val = activity.get('averageHR')
-                                avg_hr = int(avg_hr_val) if pd.notna(avg_hr_val) and avg_hr_val else 0
+                            avg_hr_val = activity.get('averageHR')
+                            avg_hr = int(avg_hr_val) if pd.notna(avg_hr_val) and avg_hr_val else 0
 
-                                cal_val = activity.get('Active_Calories')
-                                calories = int(cal_val) if pd.notna(cal_val) and cal_val else 0
+                            cal_val = activity.get('Active_Calories')
+                            calories = int(cal_val) if pd.notna(cal_val) and cal_val else 0
 
-                                # Tarjeta estilo Strava: icono de disciplina, título, píldora de esfuerzo, stats en fila
-                                stats = build_stat_row(sport, distance_km, time_hms, pace_speed, avg_hr, calories)
-                                stats_html = "".join(f'<div class="stat"><div class="v">{v}</div><div class="l">{l}</div></div>' for v, l in stats)
-                                rpe_pill_text = format_rpe_pill(perceived_effort, feeling)
+                            # Tarjeta estilo Strava: icono de disciplina, título, píldora de esfuerzo, stats en fila.
+                            # El id es lo que permite que un clic en el calendario de la semana salte aquí.
+                            stats = build_stat_row(sport, distance_km, time_hms, pace_speed, avg_hr, calories)
+                            stats_html = "".join(f'<div class="stat"><div class="v">{v}</div><div class="l">{l}</div></div>' for v, l in stats)
+                            rpe_pill_text = format_rpe_pill(perceived_effort, feeling)
 
-                                st.markdown(f"""
-                                <div class="strava-card">
-                                    <div class="strava-top" style="--sport-color: {sport_color};">
-                                        <div class="icon-badge">{sport_emoji}</div>
-                                        <div class="who">
-                                            <div class="title">{title}</div>
-                                            <div class="meta">{activity['Date'].strftime('%a, %b %d')} · {training_type}</div>
-                                        </div>
-                                        <div class="rpe-pill" style="--pill-color: {card_color};">{rpe_pill_text}</div>
+                            st.markdown(f"""
+                            <div class="strava-card" id="activity-{activity_id}">
+                                <div class="strava-top" style="--sport-color: {sport_color};">
+                                    <div class="icon-badge">{sport_emoji}</div>
+                                    <div class="who">
+                                        <div class="title">{title}</div>
+                                        <div class="meta">{activity['Date'].strftime('%a, %b %d')} · {training_type}</div>
                                     </div>
-                                    <div class="stat-row">{stats_html}</div>
+                                    <div class="rpe-pill" style="--pill-color: {card_color};">{rpe_pill_text}</div>
                                 </div>
-                                """, unsafe_allow_html=True)
+                                <div class="stat-row">{stats_html}</div>
+                            </div>
+                            """, unsafe_allow_html=True)
 
-                                # Edición directa: título, RPE, sensación y comentario (sin clics de por medio)
+                            feedback_tab, intervals_tab = st.tabs(["💬 Feedback", "📊 Intervalos"])
+                            with feedback_tab:
                                 ec1, ec2, ec3 = st.columns([2, 1, 1])
                                 with ec1:
                                     title = st.text_input("✏️ Título", value=title, key=title_key)
@@ -608,36 +582,28 @@ if email and password:
                                 with ec3:
                                     feeling = st.selectbox("🎭 Sensación", FEELING_OPTIONS, index=FEELING_OPTIONS.index(feeling), key=feeling_key)
                                 comments = st.text_area("💬 Comentario", value=comments, key=comment_key, height=60)
+                            with intervals_tab:
+                                laps = get_activity_splits(client, activity_id) if activity_id else []
+                                if laps:
+                                    lap_rows = [format_lap_row(sport, lap) for lap in laps]
+                                    st.dataframe(pd.DataFrame(lap_rows), use_container_width=True, hide_index=True)
+                                else:
+                                    st.caption("Esta actividad no tiene series/intervalos guardados en Garmin.")
 
-                                # Los intervalos/series solo se cargan y muestran al hacer clic
-                                if detail_key not in st.session_state:
-                                    st.session_state[detail_key] = False
+                            workout_entries.append({
+                                'sport': sport, 'sport_emoji': sport_emoji,
+                                'activity_name': title,
+                                'date': activity['Date'], 'headline_value': headline_value,
+                                'headline_unit': headline_unit, 'show_time': show_time,
+                                'time_hms': time_hms, 'pace_speed': pace_speed, 'training_type': training_type,
+                                'avg_hr': avg_hr, 'calories': calories, 'rpe': perceived_effort,
+                                'feeling': feeling, 'comment': comments, 'card_color': card_color,
+                            })
 
-                                btn_label = "🔼 Ocultar intervalos" if st.session_state[detail_key] else "📊 Ver intervalos / series"
-                                if st.button(btn_label, key=f"toggle_{activity_id}"):
-                                    st.session_state[detail_key] = not st.session_state[detail_key]
-                                    st.rerun()
+                            if act_idx < n - 1:
+                                st.divider()
 
-                                if st.session_state[detail_key]:
-                                    laps = get_activity_splits(client, activity_id) if activity_id else []
-                                    if laps:
-                                        lap_rows = [format_lap_row(sport, lap) for lap in laps]
-                                        st.dataframe(pd.DataFrame(lap_rows), use_container_width=True, hide_index=True)
-                                    else:
-                                        st.caption("Esta actividad no tiene series/intervalos guardados en Garmin.")
-
-                                workout_entries.append({
-                                    'sport': sport, 'sport_emoji': sport_emoji,
-                                    'activity_name': title,
-                                    'date': activity['Date'], 'headline_value': headline_value,
-                                    'headline_unit': headline_unit, 'show_time': show_time,
-                                    'time_hms': time_hms, 'pace_speed': pace_speed, 'training_type': training_type,
-                                    'avg_hr': avg_hr, 'calories': calories, 'rpe': perceived_effort,
-                                    'feeling': feeling, 'comment': comments, 'card_color': card_color,
-                                })
-
-                                if act_idx < n - 1:
-                                    st.divider()
+                        st.divider()
 
                     st.divider()
 
@@ -647,11 +613,11 @@ if email and password:
                     if st.button("📄 Download Weekly Report as PDF", key="download_pdf"):
                         try:
                             pdf_buffer = build_weekly_report_pdf(
-                                workout_entries, df_week, sleep_info if is_current_week else {}, sports, selected_monday, week_end,
+                                workout_entries, df_week, week_sleep_summary, sports, selected_monday, week_end,
                                 health_comment=health_comment,
-                                readiness=readiness if is_current_week else {},
-                                status_label=status_label if is_current_week else None,
-                                status_explanation=status_explanation if is_current_week else None,
+                                readiness=week_readiness,
+                                status_label=week_status_label,
+                                status_explanation=week_status_explanation,
                                 prev_totals_by_sport=prev_totals_by_sport, overall=overall, overall_prev=overall_prev,
                             )
 

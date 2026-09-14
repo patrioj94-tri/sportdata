@@ -107,17 +107,20 @@ def load_all_garmin_data(_client, days_back=365, user_key=None):
         if not combined:
             continue
 
+        day_sleep_secs = combined.get('userSleepSeconds') or combined.get('totalSleepSeconds') or combined.get('sleepTimeSeconds') or 0
         daily_stats.append({
             'Date': day_str,
             'Resting_HR': combined.get('restingHeartRate'),
             'Body_Battery_Max': combined.get('bodyBatteryHighestValue'),
             'Avg_Stress': combined.get('averageStressLevel'),
             'Steps': combined.get('totalSteps'),
-            'Active_Calories': combined.get('activeKilocalories')
+            'Active_Calories': combined.get('activeKilocalories'),
+            'Sleep_Hours': round(day_sleep_secs / 3600, 1) if day_sleep_secs else None,
+            'Sleep_Score': combined.get('sleepScore') or combined.get('overallSleepScore'),
         })
 
         if not sleep_info:
-            sleep_secs = combined.get('userSleepSeconds') or combined.get('totalSleepSeconds') or combined.get('sleepTimeSeconds') or 0
+            sleep_secs = day_sleep_secs
             if sleep_secs > 0:
                 sleep_info = {
                     'Date': day_str,
@@ -222,12 +225,13 @@ def get_activity_splits(_client, activity_id):
 
 
 @st.cache_data(ttl=1800, show_spinner=False)
-def get_training_readiness_today(_client, user_key=None):
-    """Puntuación de preparación diaria de Garmin (0-100), con los factores que la componen:
-    sueño, HRV, recuperación, carga de entreno y estrés. user_key aísla la caché por usuario
-    (ver comentario en load_all_garmin_data)."""
+def get_training_readiness_for_date(_client, date_str, user_key=None):
+    """Puntuación de preparación de Garmin (0-100) para una fecha concreta, con los factores
+    que la componen: sueño, HRV, recuperación, carga de entreno y estrés. Garmin sí guarda esto
+    por día, así que funciona igual para hoy o para una fecha pasada. user_key aísla la caché
+    por usuario (ver comentario en load_all_garmin_data)."""
     try:
-        data = _client.get_training_readiness(datetime.now().date().isoformat())
+        data = _client.get_training_readiness(date_str)
         if isinstance(data, list) and data:
             return data[0]
         if isinstance(data, dict):
@@ -238,10 +242,10 @@ def get_training_readiness_today(_client, user_key=None):
 
 
 @st.cache_data(ttl=1800, show_spinner=False)
-def get_training_status_today(_client, user_key=None):
-    """Estado de entrenamiento de Garmin (Productive, Maintaining, Overreaching, etc.).
-    user_key aísla la caché por usuario (ver comentario en load_all_garmin_data)."""
+def get_training_status_for_date(_client, date_str, user_key=None):
+    """Estado de entrenamiento de Garmin (Productive, Maintaining, Overreaching, etc.) para una
+    fecha concreta. user_key aísla la caché por usuario (ver comentario en load_all_garmin_data)."""
     try:
-        return _client.get_training_status(datetime.now().date().isoformat()) or {}
+        return _client.get_training_status(date_str) or {}
     except Exception:
         return {}
