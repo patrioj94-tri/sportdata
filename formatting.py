@@ -3,6 +3,7 @@ import pandas as pd
 from datetime import datetime, timedelta
 
 from garmin_data import get_activity_self_evaluation
+from translations import t
 
 
 def get_last_monday():
@@ -204,26 +205,36 @@ def categorize_sport(activity):
 
 
 # --- INTERPRETACIÓN DE TRAINING STATUS / READINESS DE GARMIN ---
-LEVEL_MAP = {
-    'PRIME': '🌟 Óptimo',
-    'HIGH': '💪 Alto',
-    'READY': '✅ Listo',
-    'MODERATE': '🙂 Moderado',
-    'LOW': '😕 Bajo',
-    'POOR': '😣 Pobre',
-    'VERY_HIGH': '🔥 Muy alto',
-}
+# Las claves son las que devuelve Garmin (en inglés); el texto que se muestra sale de
+# translations.py, para que cambie con el idioma elegido.
+STATUS_KEYS = [
+    'PRODUCTIVE', 'PEAKING', 'MAINTAINING', 'OVERREACHING',
+    'RECOVERY', 'UNPRODUCTIVE', 'DETRAINING', 'NO_STATUS',
+]
 
-STATUS_LABELS = {
-    'PRODUCTIVE': ('📈 Productivo', 'Tu carga y tu recuperación están equilibradas: tu forma física está mejorando.'),
-    'PEAKING': ('🏆 En pico de forma', 'Estás en tu mejor momento de forma. Buen momento para competir.'),
-    'MAINTAINING': ('➡️ Manteniendo', 'Estás manteniendo tu nivel de forma actual.'),
-    'OVERREACHING': ('⚠️ Sobreentrenando', 'Tu carga es demasiado alta para tu recuperación actual. Considera bajar la intensidad.'),
-    'RECOVERY': ('😌 Recuperación', 'Tu cuerpo está recuperándose: la carga reciente ha sido baja.'),
-    'UNPRODUCTIVE': ('📉 Improductivo', 'Tu forma física está bajando a pesar del esfuerzo. Revisa tu descanso y nutrición.'),
-    'DETRAINING': ('📉 Perdiendo forma', 'Estás entrenando poco últimamente: tu forma física está bajando.'),
-    'NO_STATUS': ('❔ Sin datos suficientes', 'Garmin necesita más actividades para calcular tu estado de entrenamiento.'),
-}
+
+def translate_level(level):
+    """Nivel de Training Readiness (PRIME, HIGH, LOW...) traducido al idioma activo."""
+    if not level:
+        return ''
+    key = f"level_{str(level).upper()}"
+    translated = t(key)
+    return translated if translated != key else str(level).title()
+
+
+def translate_feeling(feeling):
+    """Etiqueta de sensación traducida. Internamente la sensación se guarda siempre con la
+    etiqueta en español (es la clave), y aquí se convierte al idioma activo."""
+    if feeling in FEELING_OPTIONS:
+        return t(f"feeling_{FEELING_OPTIONS.index(feeling)}")
+    return feeling or t('feeling_0')
+
+
+def translate_sport(sport):
+    """Nombre de disciplina traducido (internamente siempre se usa el nombre en español)."""
+    key = f"sport_{sport}"
+    translated = t(key)
+    return translated if translated != key else sport
 
 
 def extract_training_status_label(status_data):
@@ -242,9 +253,9 @@ def extract_training_status_label(status_data):
                     return result
         elif isinstance(obj, str):
             upper = obj.upper()
-            for key in STATUS_LABELS:
+            for key in STATUS_KEYS:
                 if key in upper:
-                    return STATUS_LABELS[key]
+                    return t(f"status_{key}"), t(f"status_{key}_desc")
         return None
 
     if not status_data:
@@ -326,14 +337,15 @@ def delta_class(value, threshold=0.05):
 
 def format_discipline_delta(sport, cur, prev):
     """Texto de variación semanal para una disciplina, en la unidad que corresponda."""
+    suffix = t('vs_prev_week')
     if sport == 'Fuerza':
         delta_min = cur['minutes'] - prev['minutes']
-        return f"{delta_min / 60:+.1f} h vs. sem. ant."
+        return f"{delta_min / 60:+.1f} h {suffix}"
     if sport == 'Natación':
         delta_m = (cur['km'] - prev['km']) * 1000
-        return f"{delta_m:+.0f} m vs. sem. ant."
+        return f"{delta_m:+.0f} m {suffix}"
     delta_km = cur['km'] - prev['km']
-    return f"{delta_km:+.1f} km vs. sem. ant."
+    return f"{delta_km:+.1f} km {suffix}"
 
 
 def weekly_totals_by_sport(df_week, sports):
@@ -360,21 +372,22 @@ def build_stat_row(sport, distance_km, time_hms, pace_speed, avg_hr, calories):
     hr_str = f"{avg_hr}" if avg_hr else "—"
     cal_str = f"{calories}" if calories else "—"
     if sport == 'Fuerza':
-        return [(time_hms, 'Duración'), (cal_str, 'Kcal'), (hr_str, 'FC media'), ('—', 'Ritmo')]
+        return [(time_hms, t('stat_duration')), (cal_str, t('stat_kcal')), (hr_str, t('stat_hr')), ('—', t('stat_pace'))]
     if sport == 'Natación':
-        return [(f"{distance_km * 1000:.0f}", 'Metros'), (time_hms, 'Tiempo'), (pace_speed, 'Ritmo /100m'), (cal_str, 'Kcal')]
-    unit_label = 'Velocidad' if sport == 'Ciclismo' else 'Ritmo /km'
-    return [(f"{distance_km:.2f}", 'Km'), (time_hms, 'Tiempo'), (pace_speed, unit_label), (hr_str, 'FC media')]
+        return [(f"{distance_km * 1000:.0f}", t('stat_meters')), (time_hms, t('stat_time')), (pace_speed, t('stat_pace_100m')), (cal_str, t('stat_kcal'))]
+    unit_label = t('stat_speed') if sport == 'Ciclismo' else t('stat_pace_km')
+    return [(f"{distance_km:.2f}", t('stat_km')), (time_hms, t('stat_time')), (pace_speed, unit_label), (hr_str, t('stat_hr'))]
 
 
 def format_rpe_pill(rpe, feeling):
     """Texto corto para la píldora de esfuerzo/sensación de la tarjeta."""
-    feeling_text = feeling.split(' ', 1)[-1] if feeling and feeling != 'Sin anotar' else ''
+    translated = translate_feeling(feeling) if feeling and feeling != 'Sin anotar' else ''
+    feeling_text = translated.split(' ', 1)[-1] if translated else ''
     if rpe and feeling_text:
         return f"RPE {rpe} · {feeling_text}"
     if rpe:
         return f"RPE {rpe}"
-    return feeling_text or 'Sin anotar'
+    return feeling_text or t('feeling_0')
 
 
 def format_lap_row(sport, lap):
@@ -384,11 +397,11 @@ def format_lap_row(sport, lap):
     value, unit, _ = format_activity_headline(sport, distance_km, duration_min)
     avg_hr = lap.get('averageHR')
     return {
-        'Serie': lap.get('lapIndex', '—'),
-        'Distancia/Tiempo': f"{value} {unit}".strip(),
-        'Duración': format_time_hms(duration_min),
-        'Ritmo': calculate_pace_speed(sport, distance_km, duration_min),
-        'FC media': f"{int(avg_hr)} bpm" if avg_hr else '—',
+        t('lap_number'): lap.get('lapIndex', '—'),
+        t('lap_distance'): f"{value} {unit}".strip(),
+        t('lap_duration'): format_time_hms(duration_min),
+        t('lap_pace'): calculate_pace_speed(sport, distance_km, duration_min),
+        t('lap_hr'): f"{int(avg_hr)} bpm" if avg_hr else '—',
     }
 
 

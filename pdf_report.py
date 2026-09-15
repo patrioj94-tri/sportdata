@@ -13,7 +13,8 @@ from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib.units import inch
 from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer, Image
 
-from formatting import format_hours_minutes, weekly_totals_by_sport, SPORT_COLORS
+from formatting import format_hours_minutes, weekly_totals_by_sport, translate_sport, SPORT_COLORS
+from translations import t
 
 BRAND_ORANGE = colors.HexColor('#fc4c02')
 
@@ -37,7 +38,7 @@ def _daily_distance_chart(df_week, selected_monday):
     fig, ax = plt.subplots(figsize=(6.2, 1.8), dpi=150)
     ax.bar([d.strftime('%a') for d in days], daily_km, color='#fc4c02')
     ax.set_ylabel('km', fontsize=8)
-    ax.set_title('Distancia diaria de la semana', fontsize=10, color='#333333')
+    ax.set_title(t('pdf_daily_distance'), fontsize=10, color='#333333')
     ax.spines['top'].set_visible(False)
     ax.spines['right'].set_visible(False)
     ax.tick_params(labelsize=8)
@@ -63,9 +64,9 @@ def _week_hero_image(overall, overall_prev, totals_by_sport, sports):
     tiles_ax.set_ylim(0, 1)
 
     tiles = [
-        ('DISTANCIA', f"{overall['km']:.1f} km", overall['km'] - overall_prev['km'], 'km'),
-        ('TIEMPO', format_hours_minutes(overall['minutes'] / 60), (overall['minutes'] - overall_prev['minutes']) / 60, 'h'),
-        ('ENTRENOS', str(overall['sessions']), overall['sessions'] - overall_prev['sessions'], ''),
+        (t('pdf_distance'), f"{overall['km']:.1f} km", overall['km'] - overall_prev['km'], 'km'),
+        (t('pdf_time'), format_hours_minutes(overall['minutes'] / 60), (overall['minutes'] - overall_prev['minutes']) / 60, 'h'),
+        (t('pdf_workouts'), str(overall['sessions']), overall['sessions'] - overall_prev['sessions'], ''),
     ]
     for i, (label, value, delta, unit) in enumerate(tiles):
         x0 = i + 0.06
@@ -89,11 +90,11 @@ def _week_hero_image(overall, overall_prev, totals_by_sport, sports):
     if active:
         wedge_colors = [SPORT_COLORS.get(s, '#fc4c02') for s in active]
         wedges, _ = donut_ax.pie(list(active.values()), colors=wedge_colors, startangle=90, wedgeprops=dict(width=0.42))
-        donut_ax.legend(wedges, list(active.keys()), loc='center left', bbox_to_anchor=(1.02, 0.5), fontsize=7.5, frameon=False)
-        donut_ax.set_title('Tiempo por disciplina', fontsize=8.5, color='#333333')
+        donut_ax.legend(wedges, [translate_sport(s) for s in active], loc='center left', bbox_to_anchor=(1.02, 0.5), fontsize=7.5, frameon=False)
+        donut_ax.set_title(t('pdf_time_by_discipline'), fontsize=8.5, color='#333333')
     else:
         donut_ax.axis('off')
-        donut_ax.text(0.5, 0.5, 'Sin entrenos\nesta semana', ha='center', va='center', fontsize=8, color='#767676')
+        donut_ax.text(0.5, 0.5, t('pdf_no_workouts'), ha='center', va='center', fontsize=8, color='#767676')
 
     fig.tight_layout()
     img_buffer = BytesIO()
@@ -113,13 +114,13 @@ def _header_footer(canvas, doc):
     canvas.drawString(0.5 * inch, page_h - 0.37 * inch, "PATRI'S DATA LAB")
     canvas.setFont('Helvetica', 9)
     canvas.setFillColor(colors.HexColor('#888888'))
-    canvas.drawRightString(page_w - 0.5 * inch, 0.35 * inch, f"Página {doc.page}")
+    canvas.drawRightString(page_w - 0.5 * inch, 0.35 * inch, f"{t('pdf_page')} {doc.page}")
     canvas.restoreState()
 
 
 def _sport_chip(sport):
     """Chip de color por disciplina: hace en el PDF el papel que el icono hace en la web."""
-    chip = Table([[sport.upper()]], colWidths=[1.15 * inch], rowHeights=[0.22 * inch])
+    chip = Table([[translate_sport(sport).upper()]], colWidths=[1.15 * inch], rowHeights=[0.22 * inch])
     chip.setStyle(TableStyle([
         ('BACKGROUND', (0, 0), (-1, -1), colors.HexColor(SPORT_COLORS.get(sport, '#fc4c02'))),
         ('TEXTCOLOR', (0, 0), (-1, -1), colors.white),
@@ -170,18 +171,19 @@ def _activity_card(entry, styles):
 
 
 def _discipline_comparison_table(totals_by_sport, prev_totals_by_sport, sports):
-    header = ['Disciplina', 'Esta semana', 'Semana anterior', 'Diferencia']
+    header = [t('pdf_discipline'), t('pdf_this_week'), t('pdf_prev_week'), t('pdf_difference')]
     rows = [header]
     row_colors = [None]
     for sport in sports:
         cur = totals_by_sport.get(sport, {'km': 0.0, 'minutes': 0.0})
         prev = prev_totals_by_sport.get(sport, {'km': 0.0, 'minutes': 0.0})
+        label = translate_sport(sport)
         if sport == 'Fuerza':
-            rows.append([sport, format_hours_minutes(cur['minutes'] / 60), format_hours_minutes(prev['minutes'] / 60), f"{(cur['minutes'] - prev['minutes']) / 60:+.1f} h"])
+            rows.append([label, format_hours_minutes(cur['minutes'] / 60), format_hours_minutes(prev['minutes'] / 60), f"{(cur['minutes'] - prev['minutes']) / 60:+.1f} h"])
         elif sport == 'Natación':
-            rows.append([sport, f"{cur['km'] * 1000:.0f} m", f"{prev['km'] * 1000:.0f} m", f"{(cur['km'] - prev['km']) * 1000:+.0f} m"])
+            rows.append([label, f"{cur['km'] * 1000:.0f} m", f"{prev['km'] * 1000:.0f} m", f"{(cur['km'] - prev['km']) * 1000:+.0f} m"])
         else:
-            rows.append([sport, f"{cur['km']:.1f} km", f"{prev['km']:.1f} km", f"{cur['km'] - prev['km']:+.1f} km"])
+            rows.append([label, f"{cur['km']:.1f} km", f"{prev['km']:.1f} km", f"{cur['km'] - prev['km']:+.1f} km"])
         row_colors.append(SPORT_COLORS.get(sport, '#fc4c02'))
 
     table = Table(rows, colWidths=[1.5 * inch, 1.6 * inch, 1.6 * inch, 1.3 * inch], repeatRows=1)
@@ -226,7 +228,7 @@ def build_weekly_report_pdf(workout_entries, df_week, sleep_info, sports, select
     subtitle_style = ParagraphStyle(
         'Subtitle', parent=styles['Normal'], fontSize=11, textColor=colors.HexColor('#767676'), alignment=1, spaceAfter=4
     )
-    story.append(Paragraph("MI SEMANA DE ENTRENO", title_style))
+    story.append(Paragraph(t('pdf_title'), title_style))
     period_text = f"{selected_monday.strftime('%A, %B %d')} → {week_end.strftime('%A, %B %d, %Y')}"
     story.append(Paragraph(period_text, subtitle_style))
     story.append(Spacer(1, 0.15 * inch))
@@ -241,13 +243,13 @@ def build_weekly_report_pdf(workout_entries, df_week, sleep_info, sports, select
 
     # Training Readiness / Status
     if readiness.get('score') or status_label:
-        story.append(Paragraph("Estado de Forma", styles['Heading2']))
+        story.append(Paragraph(t('pdf_form_state'), styles['Heading2']))
         lines = []
         if readiness.get('score'):
-            lines.append(f"Training Readiness: <b>{readiness.get('score')}/100</b>")
+            lines.append(f"{t('pdf_readiness')}: <b>{readiness.get('score')}/100</b>")
         if status_label:
             plain_status = status_label.split(' ', 1)[-1] if ' ' in status_label else status_label
-            lines.append(f"Training Status: <b>{plain_status}</b>")
+            lines.append(f"{t('pdf_status')}: <b>{plain_status}</b>")
         if status_explanation:
             lines.append(status_explanation)
         feedback = readiness.get('feedbackLong') or readiness.get('feedbackShort')
@@ -258,16 +260,16 @@ def build_weekly_report_pdf(workout_entries, df_week, sleep_info, sports, select
 
     # Comentario de la semana (editado por el usuario)
     if health_comment:
-        story.append(Paragraph("Comentario de la Semana", styles['Heading2']))
+        story.append(Paragraph(t('pdf_week_comment'), styles['Heading2']))
         story.append(Paragraph(health_comment, styles['Normal']))
         story.append(Spacer(1, 0.2 * inch))
 
     # Resumen de sueño
     if sleep_info and sleep_info.get('Total_Hours', 0) > 0:
-        story.append(Paragraph("Sueño", styles['Heading2']))
+        story.append(Paragraph(t('pdf_sleep'), styles['Heading2']))
         sleep_data = [
-            ['Media de sueño', format_hours_minutes(sleep_info.get('Total_Hours', 0))],
-            ['Sleep Score', f"{sleep_info.get('Score', 'N/A')}/100"]
+            [t('pdf_avg_sleep'), format_hours_minutes(sleep_info.get('Total_Hours', 0))],
+            [t('sleep_score'), f"{sleep_info.get('Score', 'N/A')}/100"]
         ]
         sleep_table = Table(sleep_data, colWidths=[2.5 * inch, 2 * inch])
         sleep_table.setStyle(TableStyle([
@@ -284,11 +286,11 @@ def build_weekly_report_pdf(workout_entries, df_week, sleep_info, sports, select
         story.append(sleep_table)
         story.append(Spacer(1, 0.25 * inch))
 
-    story.append(Paragraph("Comparativa por Disciplina", styles['Heading2']))
+    story.append(Paragraph(t('pdf_comparison'), styles['Heading2']))
     story.append(_discipline_comparison_table(totals_by_sport, prev_totals_by_sport, sports))
     story.append(Spacer(1, 0.3 * inch))
 
-    story.append(Paragraph("Tus Entrenos", styles['Heading2']))
+    story.append(Paragraph(t('pdf_your_workouts'), styles['Heading2']))
     story.append(Spacer(1, 0.1 * inch))
     for entry in workout_entries:
         story.append(_activity_card(entry, styles))

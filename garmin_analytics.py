@@ -25,7 +25,8 @@ from formatting import (
     get_activity_comments,
     categorize_sport,
     extract_training_status_label,
-    LEVEL_MAP,
+    translate_level,
+    translate_sport,
     SPORT_EMOJIS,
     SPORT_COLORS,
     FEELING_OPTIONS,
@@ -43,9 +44,23 @@ from formatting import (
     FEELING_TO_GARMIN,
 )
 from pdf_report import build_weekly_report_pdf
+from translations import t, set_language, get_language, LANGUAGES
+
+# --- IDIOMA Y MODO DE VISTA ---
+# Se leen antes que nada: el layout (ancho/móvil) solo puede fijarse en set_page_config,
+# que tiene que ser la primera llamada de Streamlit. Los selectores de la barra lateral
+# escriben en session_state, así que en el rerun siguiente ya se aplica el valor nuevo.
+view_mode = st.session_state.get('view_mode', 'desktop')
+is_mobile = view_mode == 'mobile'
+set_language(st.session_state.get('lang', 'es'))
+lang = get_language()
 
 # --- CONFIGURACIÓN DE PÁGINA Y ESTILOS ---
-st.set_page_config(page_title="Patri's Data Lab", layout="wide", page_icon="🏊‍♀️")
+st.set_page_config(
+    page_title="Patri's Data Lab",
+    layout="centered" if is_mobile else "wide",
+    page_icon="🏊‍♀️",
+)
 
 st.markdown("""
 <style>
@@ -118,6 +133,12 @@ st.markdown("""
         letter-spacing: .04em;
         margin-top: 3px;
     }
+    /* En pantallas estrechas las 4 estadísticas se reparten en 2x2 en vez de apretarse */
+    @media (max-width: 640px) {
+        .stat-row { grid-template-columns: repeat(2, 1fr); row-gap: 10px; }
+        .strava-top .title { font-size: 0.95rem; }
+        .sticker-row { font-size: 1.6rem; }
+    }
     .sticker-row {
         font-size: 2.1rem;
         line-height: 1.5;
@@ -182,10 +203,20 @@ st.title("Patri's Data Lab 🏊‍♀️🚴‍♀️🏃‍♀️")
 st.markdown("<p style='font-size: 1.35rem; font-weight: 800; color: #fc4c02; margin-top: -15px;'>Do it for fun!</p>", unsafe_allow_html=True)
 
 # --- BARRA LATERAL ---
-st.sidebar.header("🔒 Credentials")
-email = st.sidebar.text_input("Garmin Email")
-password = st.sidebar.text_input("Garmin Password", type="password")
-days = st.sidebar.slider("Analysis Window (Days)", 30, 1095, 365, step=30)
+st.sidebar.selectbox(
+    t('language'), options=list(LANGUAGES.keys()),
+    format_func=lambda code: LANGUAGES[code], key='lang',
+)
+st.sidebar.radio(
+    t('view_mode'), options=['desktop', 'mobile'],
+    format_func=lambda v: t(f'view_{v}'), key='view_mode', horizontal=True,
+)
+st.sidebar.divider()
+
+st.sidebar.header(t('credentials'))
+email = st.sidebar.text_input(t('garmin_email'))
+password = st.sidebar.text_input(t('garmin_password'), type="password")
+days = st.sidebar.slider(t('analysis_window'), 30, 1095, 365, step=30)
 
 if email and password:
     client = get_garmin_client(email, password)
@@ -198,51 +229,45 @@ if email and password:
         status_label, status_explanation = extract_training_status_label(training_status_raw)
 
         # MÉTICAS GLOBALES
-        st.subheader("📊 General Overview & Training State")
-        m1, m2, m3, m4, m5, m6 = st.columns(6)
+        st.subheader(t('overview'))
+        overview_cols = st.columns(2 if is_mobile else 6)
+        m1, m2, m3, m4, m5, m6 = [overview_cols[i % len(overview_cols)] for i in range(6)]
 
         latest_load = df_load.iloc[-1] if not df_load.empty else {}
         ctl = latest_load.get('Fitness_CTL', 0)
         atl = latest_load.get('Fatigue_ATL', 0)
         tsb = latest_load.get('Form_TSB', 0)
 
-        m1.metric("Fitness (CTL)", f"{ctl:.1f}")
-        m2.metric("Fatigue (ATL)", f"{atl:.1f}")
-        m3.metric("Form / TSB", f"{tsb:.1f}", delta="Optimal Race Form" if 5 <= tsb <= 20 else "High Fatigue Risk" if tsb < -20 else "Taper / Rest")
-        m4.metric("Sleep Score", f"{sleep_info.get('Score', 'N/A')}/100", format_hours_minutes(sleep_info.get('Total_Hours', 0)))
-        m5.metric("HRV Status", f"{hrv_data.get('Status', 'N/A').title()}")
-        m6.metric("Active Days", f"{df_acts['Date'].nunique() if not df_acts.empty else 0}")
+        m1.metric(t('fitness_ctl'), f"{ctl:.1f}")
+        m2.metric(t('fatigue_atl'), f"{atl:.1f}")
+        m3.metric(t('form_tsb'), f"{tsb:.1f}", delta=t('optimal_race_form') if 5 <= tsb <= 20 else t('high_fatigue_risk') if tsb < -20 else t('taper_rest'))
+        m4.metric(t('sleep_score'), f"{sleep_info.get('Score', 'N/A')}/100", format_hours_minutes(sleep_info.get('Total_Hours', 0)))
+        m5.metric(t('hrv_status'), f"{hrv_data.get('Status', 'N/A').title()}")
+        m6.metric(t('active_days'), f"{df_acts['Date'].nunique() if not df_acts.empty else 0}")
 
         st.divider()
 
         # PESTAÑAS DEL DASHBOARD
         tab_load, tab_guidance, tab_sleep, tab_hrv_resp, tab_heat, tab_monthly, tab_health, tab_weekly, tab_logs = st.tabs([
-            "📈 Training Load",
-            "💡 Guidance",
-            "🌙 Sleep",
-            "🫀 HRV & Resp",
-            "📅 Heatmap",
-            "📊 Monthly",
-            "🩺 Health & Stress",
-            "📊 Weekly Report",
-            "📋 Activity Log"
+            t('tab_load'), t('tab_guidance'), t('tab_sleep'), t('tab_hrv'), t('tab_heatmap'),
+            t('tab_monthly'), t('tab_health'), t('tab_weekly'), t('tab_logs'),
         ])
 
         # TAB 1: MODELO DE CARGA DE ENTRENAMIENTO
         with tab_load:
-            st.subheader("SportTracks Training Load Model (Banister Framework)")
-            st.caption("Tracks long-term Fitness (CTL), short-term Fatigue (ATL), and Form (TSB) over time.")
+            st.subheader(t('load_title'))
+            st.caption(t('load_caption'))
 
             fig_tl = go.Figure()
-            fig_tl.add_trace(go.Bar(x=df_load['Date'], y=df_load['Effort'], name='Daily Effort', marker_color='rgba(252, 76, 2, 0.25)'))
-            fig_tl.add_trace(go.Scatter(x=df_load['Date'], y=df_load['Fitness_CTL'], name='Fitness (CTL - 42d)', line=dict(color='#1f77b4', width=3)))
-            fig_tl.add_trace(go.Scatter(x=df_load['Date'], y=df_load['Fatigue_ATL'], name='Fatigue (ATL - 7d)', line=dict(color='#d62728', width=2)))
-            fig_tl.add_trace(go.Scatter(x=df_load['Date'], y=df_load['Form_TSB'], name='Form (TSB)', line=dict(color='#2ca02c', width=2, dash='dot')))
+            fig_tl.add_trace(go.Bar(x=df_load['Date'], y=df_load['Effort'], name=t('daily_effort'), marker_color='rgba(252, 76, 2, 0.25)'))
+            fig_tl.add_trace(go.Scatter(x=df_load['Date'], y=df_load['Fitness_CTL'], name=t('fitness_line'), line=dict(color='#1f77b4', width=3)))
+            fig_tl.add_trace(go.Scatter(x=df_load['Date'], y=df_load['Fatigue_ATL'], name=t('fatigue_line'), line=dict(color='#d62728', width=2)))
+            fig_tl.add_trace(go.Scatter(x=df_load['Date'], y=df_load['Form_TSB'], name=t('form_line'), line=dict(color='#2ca02c', width=2, dash='dot')))
 
             fig_tl.update_layout(
-                title="Fitness, Fatigue, and Form Chart",
-                xaxis_title="Date",
-                yaxis_title="Load / Impulse Points",
+                title=t('load_chart_title'),
+                xaxis_title=t('date'),
+                yaxis_title=t('load_points'),
                 hovermode="x unified",
                 template="plotly_white",
                 legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
@@ -251,97 +276,93 @@ if email and password:
 
         # TAB 2: RECOMENDACIONES (con datos reales de Garmin: Training Readiness + Training Status)
         with tab_guidance:
-            st.subheader("💡 Daily Recovery & Garmin Recommendations")
+            st.subheader(t('guidance_title'))
 
             readiness_score = readiness.get('score')
             readiness_level = readiness.get('level')
             feedback_long = readiness.get('feedbackLong')
             feedback_short = readiness.get('feedbackShort')
 
-            c1, c2 = st.columns([1, 2])
+            c1, c2 = st.columns([1, 2]) if not is_mobile else (st.container(), st.container())
             with c1:
                 if readiness_score:
-                    st.metric(
-                        "🎯 Training Readiness",
-                        f"{readiness_score}/100",
-                        LEVEL_MAP.get(str(readiness_level).upper(), str(readiness_level).title() if readiness_level else '')
-                    )
-                st.metric("Sleep Score", f"{sleep_info.get('Score', 'N/A')}", f"{sleep_info.get('Qualifier', '')}")
+                    st.metric(t('training_readiness'), f"{readiness_score}/100", translate_level(readiness_level))
+                st.metric(t('sleep_score'), f"{sleep_info.get('Score', 'N/A')}", f"{sleep_info.get('Qualifier', '')}")
                 if not df_health.empty:
                     latest = df_health.iloc[0]
-                    st.metric("Resting HR", f"{latest.get('Resting_HR', 'N/A')} bpm")
-                    st.metric("Body Battery Peak", f"{latest.get('Body_Battery_Max', 'N/A')} / 100")
+                    st.metric(t('resting_hr'), f"{latest.get('Resting_HR', 'N/A')} bpm")
+                    st.metric(t('body_battery_peak'), f"{latest.get('Body_Battery_Max', 'N/A')} / 100")
 
             with c2:
                 if status_label:
                     st.markdown(f"### {status_label}")
                     st.info(status_explanation)
                 else:
-                    st.markdown(f"### Guidance Context ({sleep_info.get('Date', 'Recent Session')})")
+                    st.markdown(f"### {t('guidance_context')} ({sleep_info.get('Date', '')})")
 
                 if readiness_score:
-                    st.markdown("**📋 Recomendación de Garmin para hoy**")
-                    st.info(feedback_long or feedback_short or 'No hay recomendación disponible para hoy.')
+                    st.markdown(t('garmin_recommendation'))
+                    st.info(feedback_long or feedback_short or t('no_recommendation'))
 
                     factors = [
-                        ('😴 Sueño', readiness.get('sleepScoreFactorPercent')),
-                        ('🫀 HRV', readiness.get('hrvFactorPercent')),
-                        ('🔋 Recuperación', readiness.get('recoveryTimeFactorPercent')),
-                        ('🏋️ Carga', readiness.get('acwrFactorPercent')),
-                        ('😰 Estrés', readiness.get('stressHistoryFactorPercent')),
+                        (t('factor_sleep'), readiness.get('sleepScoreFactorPercent')),
+                        (t('factor_hrv'), readiness.get('hrvFactorPercent')),
+                        (t('factor_recovery'), readiness.get('recoveryTimeFactorPercent')),
+                        (t('factor_load'), readiness.get('acwrFactorPercent')),
+                        (t('factor_stress'), readiness.get('stressHistoryFactorPercent')),
                     ]
                     factors = [(label, val) for label, val in factors if val is not None]
                     if factors:
-                        st.caption("Factores que están afectando tu forma hoy (según Garmin):")
-                        fcols = st.columns(len(factors))
-                        for col, (label, val) in zip(fcols, factors):
-                            col.metric(label, f"{val:+d}%" if isinstance(val, (int, float)) else str(val))
+                        st.caption(t('factors_caption'))
+                        fcols = st.columns(2 if is_mobile else len(factors))
+                        for idx_f, (label, val) in enumerate(factors):
+                            fcols[idx_f % len(fcols)].metric(label, f"{val:+d}%" if isinstance(val, (int, float)) else str(val))
 
                     recovery_hours = readiness.get('recoveryTime')
                     if recovery_hours:
-                        st.caption(f"⏱️ Tiempo de recuperación estimado: {recovery_hours}h")
+                        st.caption(t('recovery_time').format(h=recovery_hours))
                 elif not status_label:
-                    st.info(sleep_info.get('Feedback', 'No recommendations available.'))
+                    st.info(sleep_info.get('Feedback', t('no_recommendations_available')))
 
         # TAB 3: ANÁLISIS DE SUEÑO
         with tab_sleep:
-            st.subheader(f"Sleep Stage Distribution ({sleep_info.get('Date', 'Latest Session')})")
+            st.subheader(t('sleep_distribution').format(date=sleep_info.get('Date', t('latest_session'))))
             if sleep_info and sleep_info.get('Total_Hours', 0) > 0:
-                sc1, sc2 = st.columns([1, 2])
+                sc1, sc2 = st.columns([1, 2]) if not is_mobile else (st.container(), st.container())
                 with sc1:
-                    st.metric("Total Duration", format_hours_minutes(sleep_info.get('Total_Hours', 0)))
-                    st.metric("Deep Sleep", format_hours_minutes(sleep_info.get('Deep_Hours', 0)))
-                    st.metric("Light Sleep", format_hours_minutes(sleep_info.get('Light_Hours', 0)))
-                    st.metric("REM Sleep", format_hours_minutes(sleep_info.get('REM_Hours', 0)))
+                    st.metric(t('total_duration'), format_hours_minutes(sleep_info.get('Total_Hours', 0)))
+                    st.metric(t('deep_sleep'), format_hours_minutes(sleep_info.get('Deep_Hours', 0)))
+                    st.metric(t('light_sleep'), format_hours_minutes(sleep_info.get('Light_Hours', 0)))
+                    st.metric(t('rem_sleep'), format_hours_minutes(sleep_info.get('REM_Hours', 0)))
 
                 with sc2:
                     sleep_stages = pd.DataFrame({
-                        'Stage': ['Deep', 'Light', 'REM'],
+                        'Stage': [t('stage_deep'), t('stage_light'), t('stage_rem')],
                         'Hours': [sleep_info.get('Deep_Hours', 0), sleep_info.get('Light_Hours', 0), sleep_info.get('REM_Hours', 0)]
                     })
-                    fig_sleep = px.pie(sleep_stages, values='Hours', names='Stage', title="Sleep Stage Breakdown", color_discrete_sequence=px.colors.sequential.Darkmint)
+                    fig_sleep = px.pie(sleep_stages, values='Hours', names='Stage', title=t('sleep_breakdown'), color_discrete_sequence=px.colors.sequential.Darkmint)
                     fig_sleep.update_layout(template="plotly_white")
                     st.plotly_chart(fig_sleep, use_container_width=True)
             else:
-                st.warning("No detailed sleep stage data returned for recent days.")
+                st.warning(t('no_sleep_data'))
 
         # TAB 4: HRV Y RESPIRACIÓN
         with tab_hrv_resp:
-            st.subheader("Heart Rate Variability & Respiration")
-            col_hrv, col_resp = st.columns(2)
+            st.subheader(t('hrv_title'))
+            col_hrv, col_resp = st.columns(2) if not is_mobile else (st.container(), st.container())
             with col_hrv:
-                st.markdown("### 🫀 HRV Status")
-                st.metric("HRV Status", f"{hrv_data.get('Status', 'N/A').title()}")
-                st.metric("Last Night Avg", f"{hrv_data.get('Last_Night_Avg', 'N/A')} ms")
-                st.metric("7-Day Baseline Avg", f"{hrv_data.get('Weekly_Avg', 'N/A')} ms")
+                st.markdown(t('hrv_status_header'))
+                st.metric(t('hrv_status'), f"{hrv_data.get('Status', 'N/A').title()}")
+                st.metric(t('last_night_avg'), f"{hrv_data.get('Last_Night_Avg', 'N/A')} ms")
+                st.metric(t('baseline_avg'), f"{hrv_data.get('Weekly_Avg', 'N/A')} ms")
             with col_resp:
-                st.markdown("### 🫁 Respiration Rate")
-                st.metric("Awake Respiration", f"{respiration_data.get('Avg_Waking', 'N/A')} br/pm")
-                st.metric("Sleep Respiration", f"{respiration_data.get('Avg_Sleep', 'N/A')} br/pm")
+                st.markdown(t('respiration_header'))
+                st.metric(t('awake_respiration'), f"{respiration_data.get('Avg_Waking', 'N/A')} br/pm")
+                st.metric(t('sleep_respiration'), f"{respiration_data.get('Avg_Sleep', 'N/A')} br/pm")
 
         # TAB 5: HEATMAP
         with tab_heat:
-            st.subheader("Activity Volume Matrix")
+            st.subheader(t('heatmap_title'))
             if not df_acts.empty:
                 hm = df_acts.groupby('Date')['Distance_km'].sum().reset_index()
                 hm['Date'] = pd.to_datetime(hm['Date'])
@@ -357,7 +378,7 @@ if email and password:
 
         # TAB 6: PROGRESIÓN MENSUAL
         with tab_monthly:
-            st.subheader("Monthly Progress")
+            st.subheader(t('monthly_title'))
             if not df_acts.empty:
                 monthly_agg = df_acts.groupby(['Year', 'MonthNum', 'Month'])['Distance_km'].sum().reset_index().sort_values(by=['Year', 'MonthNum'])
                 fig_monthly = px.bar(monthly_agg, x='Month', y='Distance_km', color=monthly_agg['Year'].astype(str), barmode='group', template="plotly_white")
@@ -365,17 +386,17 @@ if email and password:
 
         # TAB 7: SALUD Y ESTRÉS
         with tab_health:
-            st.subheader("Body Battery & Stress Dynamics")
+            st.subheader(t('health_title'))
             if not df_health.empty:
                 fig_health = go.Figure()
-                fig_health.add_trace(go.Scatter(x=df_health['Date'], y=df_health['Body_Battery_Max'], name='Body Battery Max', line=dict(color='limegreen', width=3)))
-                fig_health.add_trace(go.Scatter(x=df_health['Date'], y=df_health['Avg_Stress'], name='Avg Stress Score', line=dict(color='crimson', width=2)))
+                fig_health.add_trace(go.Scatter(x=df_health['Date'], y=df_health['Body_Battery_Max'], name=t('body_battery_max'), line=dict(color='limegreen', width=3)))
+                fig_health.add_trace(go.Scatter(x=df_health['Date'], y=df_health['Avg_Stress'], name=t('avg_stress'), line=dict(color='crimson', width=2)))
                 fig_health.update_layout(template="plotly_white")
                 st.plotly_chart(fig_health, use_container_width=True)
 
         # TAB 8: INFORME SEMANAL DETALLADO
         with tab_weekly:
-            st.markdown("# 📊 WEEKLY TRAINING REPORT")
+            st.markdown(t('weekly_title'))
 
             current_monday = get_last_monday()
             num_weeks = max(1, days // 7)
@@ -384,10 +405,10 @@ if email and password:
             def _week_label(monday):
                 end = monday + timedelta(days=6)
                 label = f"{monday.strftime('%d %b')} – {end.strftime('%d %b %Y')}"
-                return f"{label}  (esta semana)" if monday == current_monday else label
+                return f"{label}  {t('this_week')}" if monday == current_monday else label
 
             selected_monday = st.selectbox(
-                "📅 Semana del informe",
+                t('week_selector'),
                 options=week_options,
                 format_func=_week_label,
                 key="weekly_report_monday",
@@ -405,17 +426,17 @@ if email and password:
             week_status_label, week_status_explanation = extract_training_status_label(week_status_raw)
 
             if week_readiness.get('score') or week_status_label:
-                rc1, rc2 = st.columns(2)
+                rc1, rc2 = st.columns(2) if not is_mobile else (st.container(), st.container())
                 with rc1:
                     if week_readiness.get('score'):
-                        rlabel = "🎯 Training Readiness (hoy)" if is_current_week else f"🎯 Training Readiness ({readiness_date.strftime('%d %b')})"
+                        rlabel = t('readiness_today') if is_current_week else t('readiness_on').format(date=readiness_date.strftime('%d %b'))
                         st.metric(rlabel, f"{week_readiness.get('score')}/100")
                 with rc2:
                     if week_status_label:
                         st.caption(f"{week_status_label} — {week_status_explanation}")
 
             health_comment = st.text_area(
-                "💬 Comentario sobre tu estado de salud/forma esta semana (aparecerá en el informe)",
+                t('health_comment_label'),
                 value=st.session_state.get("health_comment", ""),
                 key="health_comment",
                 height=70,
@@ -443,16 +464,16 @@ if email and password:
                         week_sleep_score = week_health['Sleep_Score'].dropna() if 'Sleep_Score' in week_health else pd.Series(dtype=float)
                         if len(week_sleep) > 0:
                             week_sleep_summary = {'Total_Hours': week_sleep.mean(), 'Score': f"{week_sleep_score.mean():.0f}" if len(week_sleep_score) > 0 else 'N/A'}
-                            sl1, sl2 = st.columns(2)
+                            sl1, sl2 = st.columns(2) if not is_mobile else (st.container(), st.container())
                             with sl1:
-                                st.metric("😴 Sueño medio esa semana", format_hours_minutes(week_sleep_summary['Total_Hours']))
+                                st.metric(t('avg_sleep_week'), format_hours_minutes(week_sleep_summary['Total_Hours']))
                             with sl2:
                                 if len(week_sleep_score) > 0:
-                                    st.metric("⭐ Sleep Score medio", f"{week_sleep_summary['Score']}/100")
+                                    st.metric(t('avg_sleep_score'), f"{week_sleep_summary['Score']}/100")
                             st.divider()
 
                     # Tira de calendario Lun-Dom: haz clic en un icono para ir directo a esa actividad
-                    st.markdown("### 🗓️ Vista de la semana")
+                    st.markdown(t('week_view'))
                     calendar_days = build_week_calendar(df_week, selected_monday)
                     cal_cols = st.columns(7)
                     for col, day_info in zip(cal_cols, calendar_days):
@@ -473,17 +494,18 @@ if email and password:
                     # Resumen total de la semana, comparado con la anterior
                     overall = weekly_overall_totals(df_week)
                     overall_prev = weekly_overall_totals(df_prev_week)
+                    vs_prev = t('vs_prev_week')
 
-                    st.markdown("### 📦 RESUMEN TOTAL DE LA SEMANA")
-                    tot1, tot2, tot3 = st.columns(3)
-                    tot1.metric("Distancia total", f"{overall['km']:.1f} km", f"{overall['km'] - overall_prev['km']:+.1f} km vs. sem. ant.")
-                    tot2.metric("Tiempo total", format_hours_minutes(overall['minutes'] / 60), f"{(overall['minutes'] - overall_prev['minutes']) / 60:+.1f} h vs. sem. ant.")
-                    tot3.metric("Sesiones", f"{overall['sessions']}", f"{overall['sessions'] - overall_prev['sessions']:+d} vs. sem. ant.")
+                    st.markdown(t('week_summary'))
+                    tot1, tot2, tot3 = st.columns(3) if not is_mobile else (st.container(), st.container(), st.container())
+                    tot1.metric(t('total_distance'), f"{overall['km']:.1f} km", f"{overall['km'] - overall_prev['km']:+.1f} km {vs_prev}")
+                    tot2.metric(t('total_time'), format_hours_minutes(overall['minutes'] / 60), f"{(overall['minutes'] - overall_prev['minutes']) / 60:+.1f} h {vs_prev}")
+                    tot3.metric(t('sessions'), f"{overall['sessions']}", f"{overall['sessions'] - overall_prev['sessions']:+d} {vs_prev}")
 
                     st.divider()
 
-                    st.markdown("### 💪 WEEKLY TOTALS BY DISCIPLINE")
-                    summary_cols = st.columns(4)
+                    st.markdown(t('totals_by_discipline'))
+                    summary_cols = st.columns(2 if is_mobile else 4)
 
                     sports = ['Ciclismo', 'Carrera', 'Natación', 'Fuerza']
                     totals_by_sport = weekly_totals_by_sport(df_week, sports)
@@ -491,24 +513,24 @@ if email and password:
 
                     for idx, sport in enumerate(sports):
                         emoji = SPORT_EMOJIS.get(sport, '⚡')
-                        t = totals_by_sport[sport]
-                        prev_t = prev_totals_by_sport[sport]
+                        sport_totals = totals_by_sport[sport]
+                        prev_sport_totals = prev_totals_by_sport[sport]
 
-                        with summary_cols[idx]:
-                            if t['sessions'] > 0:
-                                headline = format_discipline_headline(sport, t['km'], t['minutes'])
-                                delta_text = format_discipline_delta(sport, t, prev_t)
-                                st.metric(f"{emoji} {sport}", headline, delta_text)
-                                total_hrs = int(t['minutes'] // 60)
-                                total_mins = int(t['minutes'] % 60)
-                                st.caption(f"{t['sessions']} ses. • {total_hrs}h {total_mins}m")
+                        with summary_cols[idx % len(summary_cols)]:
+                            if sport_totals['sessions'] > 0:
+                                headline = format_discipline_headline(sport, sport_totals['km'], sport_totals['minutes'])
+                                delta_text = format_discipline_delta(sport, sport_totals, prev_sport_totals)
+                                st.metric(f"{emoji} {translate_sport(sport)}", headline, delta_text)
+                                total_hrs = int(sport_totals['minutes'] // 60)
+                                total_mins = int(sport_totals['minutes'] % 60)
+                                st.caption(f"{sport_totals['sessions']} {t('sessions_short')} • {total_hrs}h {total_mins}m")
                             else:
-                                st.metric(f"{emoji} {sport}", "—", "No sessions")
+                                st.metric(f"{emoji} {translate_sport(sport)}", "—", t('no_sessions'))
 
                     st.divider()
 
-                    st.markdown("### 🎯 WORKOUT LOG")
-                    st.caption("Edita el RPE, la sensación o el comentario en la pestaña Feedback de cada entreno; los intervalos están en su propia pestaña.")
+                    st.markdown(t('workout_log'))
+                    st.caption(t('workout_log_caption'))
 
                     df_week_sorted = df_week.sort_values('Date', ascending=False)
                     unique_days = sorted(df_week_sorted['Date'].unique(), reverse=True)
@@ -576,37 +598,56 @@ if email and password:
                             </div>
                             """, unsafe_allow_html=True)
 
-                            feedback_tab, intervals_tab = st.tabs(["💬 Feedback", "📊 Intervalos"])
-                            with feedback_tab:
-                                ec1, ec2, ec3 = st.columns([2, 1, 1])
+                            # Pestañas propias (en vez de st.tabs) para poder cerrarlas: volver a
+                            # pulsar la pestaña abierta la cierra y deja la tarjeta limpia.
+                            panel_key = f"panel_{activity_id}"
+                            if panel_key not in st.session_state:
+                                st.session_state[panel_key] = 'feedback'
+
+                            tb1, tb2, _tb_sp = st.columns([1, 1, 3])
+                            with tb1:
+                                if st.button(t('tab_feedback'), key=f"tab_fb_{activity_id}", use_container_width=True,
+                                             type="primary" if st.session_state[panel_key] == 'feedback' else "secondary"):
+                                    st.session_state[panel_key] = None if st.session_state[panel_key] == 'feedback' else 'feedback'
+                                    st.rerun()
+                            with tb2:
+                                if st.button(t('tab_intervals'), key=f"tab_iv_{activity_id}", use_container_width=True,
+                                             type="primary" if st.session_state[panel_key] == 'intervals' else "secondary"):
+                                    st.session_state[panel_key] = None if st.session_state[panel_key] == 'intervals' else 'intervals'
+                                    st.rerun()
+
+                            if st.session_state[panel_key] == 'feedback':
+                                ec1, ec2, ec3 = st.columns([2, 1, 1]) if not is_mobile else (st.container(), st.container(), st.container())
                                 with ec1:
-                                    title = st.text_input("✏️ Título", value=title, key=title_key)
+                                    title = st.text_input(t('field_title'), value=title, key=title_key)
                                 with ec2:
-                                    perceived_effort = st.slider("📊 RPE", 0, 10, value=int(perceived_effort), key=rpe_key)
+                                    perceived_effort = st.slider(t('field_rpe'), 0, 10, value=int(perceived_effort), key=rpe_key)
                                 with ec3:
-                                    feeling = st.selectbox("🎭 Sensación", FEELING_OPTIONS, index=FEELING_OPTIONS.index(feeling), key=feeling_key)
-                                comments = st.text_area("💬 Comentario", value=comments, key=comment_key, height=60)
+                                    feeling = st.selectbox(t('field_feeling'), FEELING_OPTIONS,
+                                                           index=FEELING_OPTIONS.index(feeling), key=feeling_key,
+                                                           format_func=lambda f: t(f"feeling_{FEELING_OPTIONS.index(f)}"))
+                                comments = st.text_area(t('field_comment'), value=comments, key=comment_key, height=60)
 
                                 # Guardar de vuelta en Garmin para que no se pierda al cerrar la app
-                                if st.button("💾 Guardar en Garmin", key=f"save_{activity_id}"):
+                                if st.button(t('save_to_garmin'), key=f"save_{activity_id}"):
                                     ok_title = set_activity_title(client, activity_id, title)
                                     ok_comment = set_activity_comment(client, activity_id, comments)
                                     ok_eval = set_activity_evaluation(
                                         client, activity_id, perceived_effort, FEELING_TO_GARMIN.get(feeling)
                                     )
                                     if ok_title and ok_comment:
-                                        msg = "✅ Título y comentario guardados en tu Garmin."
-                                        msg += " RPE y sensación también." if ok_eval else " (El RPE/sensación no se pudo guardar en Garmin: se queda solo en esta sesión.)"
+                                        msg = t('save_ok')
+                                        msg += t('save_ok_eval') if ok_eval else t('save_ko_eval')
                                         st.success(msg)
                                     else:
-                                        st.error("No se pudo guardar en Garmin. Revisa tu conexión e inténtalo de nuevo.")
-                            with intervals_tab:
+                                        st.error(t('save_error'))
+                            elif st.session_state[panel_key] == 'intervals':
                                 laps = get_activity_splits(client, activity_id) if activity_id else []
                                 if laps:
                                     lap_rows = [format_lap_row(sport, lap) for lap in laps]
                                     st.dataframe(pd.DataFrame(lap_rows), use_container_width=True, hide_index=True)
                                 else:
-                                    st.caption("Esta actividad no tiene series/intervalos guardados en Garmin.")
+                                    st.caption(t('no_intervals'))
 
                             workout_entries.append({
                                 'sport': sport, 'sport_emoji': sport_emoji,
@@ -626,9 +667,9 @@ if email and password:
                     st.divider()
 
                     # EXPORTACIÓN PDF
-                    st.markdown("### 📤 ¡Manda tu semana al entrenador!")
+                    st.markdown(t('export_report'))
 
-                    if st.button("📄 Download Weekly Report as PDF", key="download_pdf"):
+                    if st.button(t('download_pdf'), key="download_pdf"):
                         try:
                             pdf_buffer = build_weekly_report_pdf(
                                 workout_entries, df_week, week_sleep_summary, sports, selected_monday, week_end,
@@ -640,29 +681,29 @@ if email and password:
                             )
 
                             st.download_button(
-                                label="✅ PDF Ready - Click to Download",
+                                label=t('pdf_ready'),
                                 data=pdf_buffer,
                                 file_name=f"Weekly_Report_{selected_monday.strftime('%Y%m%d')}.pdf",
                                 mime="application/pdf",
                                 key="pdf_download"
                             )
-                            st.success("✅ PDF generated successfully!")
+                            st.success(t('pdf_success'))
                         except ImportError:
-                            st.error("📦 Please install reportlab and matplotlib: `pip install reportlab matplotlib`")
+                            st.error(t('pdf_missing_libs'))
                         except Exception as e:
-                            st.error(f"Error generating PDF: {e}")
+                            st.error(t('pdf_error').format(error=e))
                 else:
-                    st.warning("No workouts found for this week.")
+                    st.warning(t('no_workouts_week'))
             else:
-                st.warning("No activity data available.")
+                st.warning(t('no_activity_data'))
 
         # TAB 9: REGISTRO DE ACTIVIDADES
         with tab_logs:
-            st.subheader("Activity Registry")
+            st.subheader(t('activity_registry'))
             if not df_acts.empty:
                 cols = ['activityName', 'Sport', 'Date', 'Distance_km', 'Duration_min', 'Elevation_m', 'Effort']
                 avail = [c for c in cols if c in df_acts.columns]
                 st.dataframe(df_acts[avail].sort_values(by='Date', ascending=False), use_container_width=True, hide_index=True)
 
 else:
-    st.info("👈 Enter your Garmin Connect credentials in the sidebar to load Patri's Data Lab.")
+    st.info(t('enter_credentials'))
