@@ -5,3 +5,5 @@ __pycache__/
 _commit_msg.txt
 _test_*.py
 _test_output.pdf
+MI_TOKEN_GARMIN.txt
+.streamlit/secrets.toml

@@ -218,28 +218,30 @@ st.sidebar.divider()
 st.sidebar.header(t('credentials'))
 
 # Garmin protege su pantalla de login con Cloudflare, que bloquea las IPs de servidores: por
-# eso la app desplegada daba HTTP 403. Si hay un token configurado en los secrets, se entra
-# con él y se evita ese login. En local sigue funcionando el email y la contraseña de siempre.
-try:
-    secret_token = st.secrets.get("garmin_token")
-except Exception:
-    secret_token = None
+# eso desde la app desplegada no funciona entrar con contraseña (HTTP 403). La alternativa es
+# un token que cada persona genera una vez en su propio ordenador (ver generar_token.py) y
+# pega aquí: vale ~1 año y evita el login bloqueado. En local la contraseña sigue funcionando.
+login_method = st.sidebar.radio(
+    t('login_method'), options=['token', 'password'],
+    format_func=lambda m: t(f'login_{m}'), horizontal=True, key='login_method',
+)
 
-if secret_token:
-    st.sidebar.success("🔑 Sesión iniciada con token")
-    email = ""
-    password = ""
+email = password = user_token = ""
+if login_method == 'token':
+    user_token = st.sidebar.text_area(t('paste_token'), height=90, key='user_token',
+                                      placeholder='{"oauth1_token": ..., "oauth2_token": ...}')
+    st.sidebar.caption(t('token_help'))
 else:
     email = st.sidebar.text_input(t('garmin_email'))
     password = st.sidebar.text_input(t('garmin_password'), type="password")
 
 days = st.sidebar.slider(t('analysis_window'), 30, 1095, 365, step=30)
 
-if secret_token or (email and password):
-    if secret_token:
-        # user_key a partir del propio token, para que la caché no se mezcle entre personas
-        email = hashlib.sha256(secret_token.encode()).hexdigest()[:16]
-        client = get_garmin_client_from_token(secret_token, user_key=email)
+if user_token.strip() or (email and password):
+    if user_token.strip():
+        # La clave de usuario sale del propio token, para que la caché no se mezcle entre personas
+        email = hashlib.sha256(user_token.strip().encode()).hexdigest()[:16]
+        client = get_garmin_client_from_token(user_token.strip(), user_key=email)
     else:
         client = get_garmin_client(email, password)
 

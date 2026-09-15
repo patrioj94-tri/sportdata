@@ -7,6 +7,7 @@ import streamlit as st
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta
 from garminconnect import Garmin
+from translations import t
 
 SESSIONS_ROOT = os.path.expanduser("~/.garminconnect_sessions")
 
@@ -55,7 +56,15 @@ def get_garmin_client(email, password):
             client.garth.dump(token_dir)
         return client
     except Exception as e:
-        st.sidebar.error(f"Authentication failed: {e}")
+        msg = str(e)
+        if "403" in msg or "Cloudflare" in msg or "bot challenge" in msg:
+            # Garmin ha bloqueado el login por venir de un servidor: no es culpa de la
+            # contraseña, y volver a intentarlo no ayuda. Lo que sí funciona es el token.
+            st.sidebar.error(t('login_blocked_by_garmin'))
+        elif "429" in msg or "Too Many" in msg:
+            st.sidebar.error(t('login_rate_limited'))
+        else:
+            st.sidebar.error(f"{t('login_failed')}: {msg}")
         return None
 
 
