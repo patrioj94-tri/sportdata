@@ -1,6 +1,7 @@
 """Capa de acceso a Garmin Connect: login, cacheo y extracción de datos crudos."""
 import hashlib
 import os
+import tempfile
 import pandas as pd
 import streamlit as st
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -16,6 +17,29 @@ def _token_dir_for(email):
     (una carpeta compartida haría que una persona pudiera heredar la sesión de otra)."""
     email_hash = hashlib.sha256(email.strip().lower().encode()).hexdigest()[:16]
     return os.path.join(SESSIONS_ROOT, email_hash)
+
+
+@st.cache_resource(show_spinner=False)
+def get_garmin_client_from_token(token_json, user_key):
+    """Inicia sesión usando un token ya generado, sin pasar por el login de Garmin.
+
+    Garmin protege su pantalla de login con Cloudflare, que bloquea las IPs de los
+    servidores (por eso la app desplegada daba HTTP 403). El token se genera una sola vez
+    desde un ordenador normal y vale ~1 año, así que la app desplegada puede saltarse ese
+    login y hablar directamente con la API de datos.
+    """
+    try:
+        token_dir = os.path.join(tempfile.gettempdir(), f"garmin_token_{user_key}")
+        os.makedirs(token_dir, exist_ok=True)
+        with open(os.path.join(token_dir, "garmin_tokens.json"), "w", encoding="utf-8") as f:
+            f.write(token_json)
+
+        client = Garmin()
+        client.login(token_dir)
+        return client
+    except Exception as e:
+        st.sidebar.error(f"Token inválido o caducado: {e}")
+        return None
 
 
 @st.cache_resource(show_spinner=False)

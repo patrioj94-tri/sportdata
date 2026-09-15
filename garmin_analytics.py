@@ -1,3 +1,4 @@
+import hashlib
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
@@ -6,6 +7,7 @@ from datetime import datetime, timedelta
 
 from garmin_data import (
     get_garmin_client,
+    get_garmin_client_from_token,
     load_all_garmin_data,
     compute_training_load,
     get_training_readiness_for_date,
@@ -214,12 +216,33 @@ st.sidebar.radio(
 st.sidebar.divider()
 
 st.sidebar.header(t('credentials'))
-email = st.sidebar.text_input(t('garmin_email'))
-password = st.sidebar.text_input(t('garmin_password'), type="password")
+
+# Garmin protege su pantalla de login con Cloudflare, que bloquea las IPs de servidores: por
+# eso la app desplegada daba HTTP 403. Si hay un token configurado en los secrets, se entra
+# con él y se evita ese login. En local sigue funcionando el email y la contraseña de siempre.
+try:
+    secret_token = st.secrets.get("garmin_token")
+except Exception:
+    secret_token = None
+
+if secret_token:
+    st.sidebar.success("🔑 Sesión iniciada con token")
+    email = ""
+    password = ""
+else:
+    email = st.sidebar.text_input(t('garmin_email'))
+    password = st.sidebar.text_input(t('garmin_password'), type="password")
+
 days = st.sidebar.slider(t('analysis_window'), 30, 1095, 365, step=30)
 
-if email and password:
-    client = get_garmin_client(email, password)
+if secret_token or (email and password):
+    if secret_token:
+        # user_key a partir del propio token, para que la caché no se mezcle entre personas
+        email = hashlib.sha256(secret_token.encode()).hexdigest()[:16]
+        client = get_garmin_client_from_token(secret_token, user_key=email)
+    else:
+        client = get_garmin_client(email, password)
+
     if client:
         df_health, sleep_info, hrv_data, respiration_data, df_acts = load_all_garmin_data(client, days, user_key=email)
         df_load = compute_training_load(df_acts, days)
